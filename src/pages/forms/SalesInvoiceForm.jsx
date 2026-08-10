@@ -52,7 +52,7 @@ export default function SalesInvoiceForm({ onClose }) {
 
   // Items and logistics
   const [items, setItems] = useState([]);
-  const [warehouse, setWarehouse] = useState('Main Location');
+  const [warehouse, setWarehouse] = useState('');
   const [logistics, setLogistics] = useState([]);
 
   const subtotal = items.reduce((s, i) => s + (parseFloat(i.amount) || 0), 0);
@@ -89,7 +89,7 @@ export default function SalesInvoiceForm({ onClose }) {
           tax: i.tax || '18%',
           amount: i.amount,
           salesLedger,
-          godown: warehouse || 'Main Location',
+          godown: warehouse || '',
         })),
         taxes: taxAmt > 0 ? [
           { ledgerName: 'CGST', taxAmount: Math.round(taxAmt / 2), taxableValue: subtotal },

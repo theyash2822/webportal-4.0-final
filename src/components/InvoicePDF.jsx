@@ -326,20 +326,23 @@ export default function InvoicePDF({ open, onClose, invoice, companyGuid }) {
   if (!open) return null;
 
   const template = getPDFTemplate(companyGuid);
-  const inv = invoice || {
-    ref: 'SI-2025-0782', date: '07 Apr 2026',
-    companyName: 'Your Company', companyGstin: '27AABCM1234F1Z5',
-    companyAddress: '301, Business Park, Mumbai – 400021',
-    customer: 'Sample Customer Ltd.', gstin: '27AABCS1234A1Z3',
-    address: '12, MG Road, Bengaluru – 560001', phone: '+91 98200 00001',
-    items: [
-      { name: 'Polymer Sheet 2mm', hsn: '3920', qty: 200, unit: 'Kg', rate: 180, tax: 18, amount: 36000 },
-      { name: 'Chemical Mix Type-3', hsn: '2900', qty: 50, unit: 'Ltr', rate: 420, tax: 18, amount: 21000 },
-    ],
-    subtotal: 57000, cgst: 5130, sgst: 5130, igst: 0, discount: 0, total: 67260,
-    mode: 'Credit', terms: 'Payment due within 30 days.',
-    narration: 'Goods dispatched via Blue Dart.',
-  };
+
+  if (!invoice) {
+    return (
+      <div className="fixed inset-0 bg-black/50 backdrop-blur-sm z-50 flex items-center justify-center p-4">
+        <div className="bg-white rounded-2xl shadow-2xl w-full max-w-md p-6 text-center">
+          <p className="text-sm font-semibold text-[#1A1A1A]">No invoice selected</p>
+          <p className="text-xs text-[#787774] mt-2">Open a real voucher to preview the PDF.</p>
+          <button onClick={onClose}
+            className="mt-4 px-4 py-2 rounded-lg text-sm font-medium border border-[#D4D3CE] text-[#787774] hover:bg-[#F5F4EF]">
+            Close
+          </button>
+        </div>
+      </div>
+    );
+  }
+
+  const inv = invoice;
 
   const handlePrint = () => {
     const html = buildInvoiceHTML(inv, template);

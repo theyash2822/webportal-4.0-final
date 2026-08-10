@@ -17,7 +17,7 @@ export default function SalesOrderForm({ onClose }) {
   const [createdNumber, setCreatedNumber] = useState('');
   const [isOptional, setIsOptional] = useState(false);
   const [partyLedger, setPartyLedger] = useState('');
-  const [salesLedger, setSalesLedger] = useState('Sales Accounts');
+  const [salesLedger, setSalesLedger] = useState('');
   const [orderDate, setOrderDate] = useState(new Date().toISOString().split('T')[0]);
   const [reference, setReference] = useState('');
   const [narration, setNarration] = useState('');
@@ -44,6 +44,7 @@ export default function SalesOrderForm({ onClose }) {
 
   const handleSubmit = async () => {
     if (!partyLedger) { setError('Please select a customer / party'); return; }
+    if (!salesLedger) { setError('Please select a sales ledger'); return; }
     if (!items.length || !items[0]?.name) { setError('Please add at least one item'); return; }
     if (!selectedCompany) { setError('No company selected'); return; }
     setSubmitting(true); setError('');
@@ -51,10 +52,12 @@ export default function SalesOrderForm({ onClose }) {
       const result = await createSalesOrder({
         companyGuid: selectedCompany.guid, companyName: selectedCompany.name,
         date: orderDate.replace(/-/g, ''), partyLedger,
-        salesLedger: salesLedger || 'Sales Accounts',
+        salesLedger,
         items: items.filter(i => i.name).map(i => ({
           itemName: i.name, billedQty: parseFloat(i.qty) || 1,
           rate: parseFloat(i.rate) || 0, amount: parseFloat(i.amount) || 0,
+          salesLedger,
+          godown: warehouse || '',
         })),
         narration, reference, isOptional,
       });

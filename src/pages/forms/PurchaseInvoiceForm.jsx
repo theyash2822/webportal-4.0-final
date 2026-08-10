@@ -48,6 +48,7 @@ export default function PurchaseInvoiceForm({ onClose }) {
 
   const handleSubmit = async () => {
     if (!partyLedger) { setError('Please select a vendor / party'); return; }
+    if (!purchaseLedger) { setError('Please select a purchase ledger'); return; }
     if (!items.length || !items[0]?.name) { setError('Please add at least one item'); return; }
     if (!selectedCompany) { setError('No company selected'); return; }
     setSubmitting(true); setError('');
@@ -55,11 +56,12 @@ export default function PurchaseInvoiceForm({ onClose }) {
       const result = await createPurchaseInvoice({
         companyGuid: selectedCompany.guid, companyName: selectedCompany.name,
         date: invoiceDate.replace(/-/g, ''), partyLedger,
-        purchaseLedger: purchaseLedger || 'Purchase Account GST',
+        purchaseLedger: purchaseLedger,
         items: items.filter(i => i.name).map(i => ({
           itemName: i.name, billedQty: parseFloat(i.qty) || 1,
           rate: parseFloat(i.rate) || 0, amount: parseFloat(i.amount) || 0,
-          godown: warehouse, taxLedger: 'Input GST 18%', taxPercent: parseFloat(i.tax) || 18,
+          purchaseLedger,
+          godown: warehouse || '', taxPercent: parseFloat(i.tax) || 18,
         })),
         narration, isOptional,
       });

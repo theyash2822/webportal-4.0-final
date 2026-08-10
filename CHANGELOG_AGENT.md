@@ -4,6 +4,20 @@ Format: Date | Task | Files Changed | Behavior Changed | Tested | Risks
 
 ---
 
+## 2026-08-10 | Remove remaining mock data
+Files changed: deleted `src/data/{mockData,salesMock,purchaseMock,inventoryMock,paymentsMock,expensesMock}.js`; `ItemsTable.jsx`, `SalesInvoiceForm.jsx`, `InvoicePDF.jsx`, `QuotationForm.jsx`, `Settings.jsx`, `KNOWN_ISSUES.md`, `FRONTEND_MAP.md`
+Behavior changed:
+- Deleted unused mock datasets
+- Warehouse dropdown loads live godowns via `fetchWarehouses` (empty if none — no Main Warehouse / Godown 1/2)
+- Sales invoice no longer defaults godown to "Main Location"
+- Invoice PDF requires a real invoice (no Polymer sample fallback)
+- Quotation form is a not-available stub (no fake customers / QT numbers)
+- Settings PDF template preview uses anonymous placeholder labels only
+Tested: `npm run build` PASS
+Risks: forms with no warehouses synced will show empty warehouse select until godowns exist in Tally
+
+---
+
 ## 2026-08-10 | Mobile data parity — Phases 1–3
 Files changed:
 - Phase 1: `src/services/api.js`, `src/pages/sales/SalesModule.jsx`, `src/pages/purchase/PurchaseModule.jsx`, `src/pages/compliance/AuditTrail.jsx`, `src/layouts/AppShell.jsx`

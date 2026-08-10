@@ -1,7 +1,7 @@
 import { useState, useCallback, useEffect } from 'react';
 import { Plus, Trash2, Package } from 'lucide-react';
 import { useAuth } from '../contexts/AuthContext';
-import { fetchStocks, fetchLedgers } from '../services/api';
+import { fetchStocks, fetchWarehouses, unwrapList } from '../services/api';
 import LiveSearch from './LiveSearch';
 import { useSettings } from '../contexts/SettingsContext';
 
@@ -14,19 +14,19 @@ export default function ItemsTable({ warehouse, onWarehouseChange, onItemsChange
   const { formatAmount, formatAmountCompact, formatDate } = useSettings();
   const [items, setItems] = useState([emptyItem()]);
   const [warehouses, setWarehouses] = useState([]);
+  const [whLoading, setWhLoading] = useState(false);
   const { selectedCompany } = useAuth();
 
   useEffect(() => {
     if (!selectedCompany?.guid) return;
-    fetchLedgers({ companyGuid: selectedCompany.guid, searchText: 'warehouse', pageSize: 30 })
+    setWhLoading(true);
+    fetchWarehouses(selectedCompany.guid)
       .then(res => {
-        const wh = (res?.data?.ledgers || []).filter(l =>
-          (l.parent || '').toLowerCase().includes('warehouse') ||
-          (l.name || '').toLowerCase().includes('warehouse') ||
-          (l.name || '').toLowerCase().includes('godown')
-        );
-        if (wh.length > 0) setWarehouses(wh.map(l => l.name));
-      }).catch(() => {});
+        const list = unwrapList(res);
+        setWarehouses(list.map(w => w.name).filter(Boolean));
+      })
+      .catch(() => setWarehouses([]))
+      .finally(() => setWhLoading(false));
   }, [selectedCompany?.guid]);
 
   const [stockMap, setStockMap] = useState({});
@@ -95,9 +95,10 @@ export default function ItemsTable({ warehouse, onWarehouseChange, onItemsChange
           onChange={e => onWarehouseChange?.(e.target.value)}
           className="notion-input text-sm flex-1 max-w-xs"
         >
-          <option value="">Select Warehouse</option>
-          {(warehouses.length > 0 ? warehouses : ['Main Warehouse', 'Godown 1', 'Godown 2'])
-            .map(w => <option key={w}>{w}</option>)}
+          <option value="">
+            {whLoading ? 'Loading warehouses…' : warehouses.length ? 'Select Warehouse' : 'No warehouses found'}
+          </option>
+          {warehouses.map(w => <option key={w} value={w}>{w}</option>)}
         </select>
       </div>
 

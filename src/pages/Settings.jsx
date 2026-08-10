@@ -125,16 +125,16 @@ const TEMPLATES = [
 ];
 
 const SAMPLE_INV = {
-  ref: 'SI-2025-0001', date: '07 Apr 2026',
-  companyName: 'Your Company', companyGstin: '27AABCM1234F1Z5',
-  companyAddress: 'Mumbai – 400021',
-  customer: 'Sample Customer Ltd.', gstin: '27AABCS1234A1Z3',
-  address: 'Bengaluru – 560001',
+  ref: 'INV-PREVIEW', date: '01 Apr 2026',
+  companyName: 'Company Name', companyGstin: '00AAAAA0000A0A0',
+  companyAddress: 'Company address',
+  customer: 'Customer Name', gstin: '00BBBBB0000B0B0',
+  address: 'Customer address',
   items: [
-    { name: 'Product A', hsn: '8471', qty: 10, unit: 'Pcs', rate: 5000, tax: 18, amount: 50000 },
-    { name: 'Service Fee', hsn: '9983', qty: 1, unit: 'Nos', rate: 2000, tax: 18, amount: 2000 },
+    { name: 'Item 1', hsn: '0000', qty: 1, unit: 'Nos', rate: 100, tax: 18, amount: 100 },
+    { name: 'Item 2', hsn: '0000', qty: 1, unit: 'Nos', rate: 50, tax: 18, amount: 50 },
   ],
-  subtotal: 52000, cgst: 4680, sgst: 4680, igst: 0, discount: 0, total: 61360,
+  subtotal: 150, cgst: 13.5, sgst: 13.5, igst: 0, discount: 0, total: 177,
   mode: 'Credit', terms: 'Payment due within 30 days.',
 };
 
