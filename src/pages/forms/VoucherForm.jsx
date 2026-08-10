@@ -11,7 +11,8 @@ import { useSettings } from '../../contexts/SettingsContext';
 
 const VOUCHER_TYPES = ['Payment', 'Receipt', 'Journal', 'Contra'];
 
-export default function VoucherForm({ onClose }) {
+export default function VoucherForm({ onClose, initialType = 'Payment' }) {
+  const { fyMin, fyMax } = useFYDates();
   const { formatAmount, formatAmountCompact, formatDate } = useSettings();
   const { selectedCompany } = useAuth();
 
@@ -32,7 +33,7 @@ export default function VoucherForm({ onClose }) {
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState('');
   const [createdNumber, setCreatedNumber] = useState('');
-  const [type, setType] = useState('Payment');
+  const [type, setType] = useState(initialType || 'Payment');
   const [isOptional, setIsOptional] = useState(false);
 
   // Common fields

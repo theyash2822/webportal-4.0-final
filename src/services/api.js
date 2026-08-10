@@ -7,9 +7,15 @@
 const BASE_URL = import.meta.env.VITE_API_URL || 'http://localhost:3001/app';
 const WS_URL   = import.meta.env.VITE_WS_URL  || 'http://localhost:3001';
 
+// /api/* and /tally/* live on the host root — strip /app from VITE_API_URL
+const API_ROOT = import.meta.env.VITE_API_URL
+  ? import.meta.env.VITE_API_URL.replace(/\/app\/?$/, '')
+  : 'http://localhost:3001';
+const TALLY_BASE = API_ROOT;
+
 const getToken = () => localStorage.getItem('authToken');
 
-// ─── Core request ────────────────────────────────────────────────────────────
+// ─── Core request (/app/*) ───────────────────────────────────────────────────
 async function request(method, endpoint, body = null, skipAuth = false) {
   const headers = { 'Content-Type': 'application/json' };
   if (!skipAuth) {
@@ -32,6 +38,89 @@ const get  = (ep, opts)    => request('GET',    ep, null, opts?.skipAuth);
 const post = (ep, b, opts) => request('POST',   ep, b,    opts?.skipAuth);
 const put  = (ep, b)       => request('PUT',    ep, b);
 const del  = (ep)          => request('DELETE', ep);
+
+// ─── Root GET (/api/*, /tally/*) ─────────────────────────────────────────────
+async function apiGet(path) {
+  const headers = {};
+  const token = getToken();
+  if (token) headers['Authorization'] = `Bearer ${token}`;
+  const res = await fetch(`${API_ROOT}${path}`, { headers });
+  if (!res.ok) {
+    const e = await res.json().catch(() => ({}));
+    throw Object.assign(new Error(e.message || e?.error?.message || `HTTP ${res.status}`), { status: res.status, data: e });
+  }
+  return res.json();
+}
+
+async function apiRequest(method, path, body = null) {
+  const headers = { 'Content-Type': 'application/json' };
+  const token = getToken();
+  if (token) headers['Authorization'] = `Bearer ${token}`;
+  const res = await fetch(`${API_ROOT}${path}`, {
+    method,
+    headers,
+    body: body ? JSON.stringify(body) : undefined,
+  });
+  if (!res.ok) {
+    const e = await res.json().catch(() => ({}));
+    throw Object.assign(new Error(e.message || e?.error?.message || `HTTP ${res.status}`), { status: res.status, data: e });
+  }
+  return res.json();
+}
+
+/** Find array in common mobile/backend response shapes */
+export function unwrapList(res) {
+  if (!res) return [];
+  if (Array.isArray(res)) return res;
+  const d = res.data ?? res.result ?? res;
+  if (Array.isArray(d)) return d;
+  if (!d || typeof d !== 'object') return [];
+  for (const key of ['items', 'rows', 'vouchers', 'entries', 'parties', 'warehouses', 'ledgers', 'stocks', 'list', 'data']) {
+    if (Array.isArray(d[key])) return d[key];
+  }
+  return [];
+}
+
+function withCompany(path, companyGuid, params = {}) {
+  const qs = new URLSearchParams();
+  if (companyGuid) qs.set('companyGuid', companyGuid);
+  Object.entries(params || {}).forEach(([k, v]) => {
+    if (v != null && v !== '') qs.set(k, String(v));
+  });
+  const q = qs.toString();
+  return q ? `${path}?${q}` : path;
+}
+
+async function fetchRegisterOrVouchers(apiPath, companyGuid, params, voucherType) {
+  // Backend voucherListHandler expects from/to/limit (not fromDate/toDate/pageSize)
+  const apiParams = {
+    from: params?.from || params?.fromDate,
+    to: params?.to || params?.toDate,
+    search: params?.search || params?.searchText,
+    page: params?.page || 1,
+    limit: params?.limit || params?.pageSize || 100,
+    partyName: params?.partyName,
+  };
+  try {
+    const res = await apiGet(withCompany(apiPath, companyGuid, apiParams));
+    const items = unwrapList(res);
+    if (items.length > 0 || res?.success !== false) {
+      // Keep data as array — unwrapList + callers expect array or { vouchers: [] }
+      return { success: true, data: items, meta: res?.meta };
+    }
+  } catch {
+    // fall through to vouchers POST
+  }
+  return fetchVouchers({
+    companyGuid,
+    voucherType,
+    page: params?.page || 1,
+    pageSize: params?.pageSize || params?.limit || 100,
+    searchText: params?.search || params?.searchText,
+    fromDate: params?.fromDate || params?.from,
+    toDate: params?.toDate || params?.to,
+  });
+}
 
 // ─── Auth ─────────────────────────────────────────────────────────────────────
 export const sendOtp  = (mobileNumber, countryCode = '+91') => post('/send-otp',  { mobileNumber, countryCode }, { skipAuth: true });
@@ -87,6 +176,34 @@ export const fetchStockDetails = (body)              => post('/stock',          
 // ─── Vouchers ─────────────────────────────────────────────────────────────────
 export const fetchVouchers = (body) => post('/vouchers', body);
 
+// Register helpers — GET /api/* first, fallback to POST /vouchers
+export const fetchSalesOrders = (companyGuid, params = {}) =>
+  fetchRegisterOrVouchers('/api/sales/orders', companyGuid, params, 'Sales Order');
+export const fetchPurchaseOrders = (companyGuid, params = {}) =>
+  fetchRegisterOrVouchers('/api/purchase/orders', companyGuid, params, 'Purchase Order');
+export const fetchCreditNotes = (companyGuid, params = {}) =>
+  fetchRegisterOrVouchers('/api/sales/credit-notes', companyGuid, params, 'Credit Note');
+export const fetchDebitNotes = (companyGuid, params = {}) =>
+  fetchRegisterOrVouchers('/api/purchase/debit-notes', companyGuid, params, 'Debit Note');
+export const fetchDeliveryNotes = (companyGuid, params = {}) =>
+  fetchRegisterOrVouchers('/api/sales/delivery-notes', companyGuid, params, 'Delivery Note');
+
+export const fetchMyEntries = (companyGuid, params = {}) =>
+  apiGet(withCompany('/api/vouchers/my-entries', companyGuid, params));
+export const retryMyEntry = (id) =>
+  apiRequest('POST', `/api/vouchers/my-entries/${id}/retry`, {});
+
+export const fetchWarehouses = (companyGuid) =>
+  apiGet(withCompany('/api/stocks/warehouses', companyGuid));
+
+export const fetchPartiesList = async (companyGuid, params = {}) => {
+  try {
+    return await apiGet(withCompany('/api/parties', companyGuid, params));
+  } catch {
+    return fetchParties({ companyGuid, ...params });
+  }
+};
+
 // ─── Dashboard ────────────────────────────────────────────────────────────────
 export const fetchDashboard = (body) => post('/dashboard', body);
 
@@ -109,35 +226,29 @@ export const fetchLedgerFyBalances = (companyGuid, fy) => {
   const fyParam = typeof fy === 'string' ? fy : fyParamFromFY(fy);
   const params = new URLSearchParams({ companyGuid });
   if (fyParam) params.set('fy', fyParam);
-  return request('GET', `/api/ledgers/fy-balances?${params}`);
+  return apiGet(`/api/ledgers/fy-balances?${params}`);
 };
 export const fetchLedgerStatement = (companyGuid, id, fy, extra = {}) => {
   const fyParam = typeof fy === 'string' ? fy : fyParamFromFY(fy);
   const params = new URLSearchParams({ companyGuid });
   if (fyParam) params.set('fy', fyParam);
   Object.entries(extra).forEach(([k, v]) => v && params.set(k, v));
-  return request('GET', `/api/ledgers/${id}/statement?${params}`);
+  return apiGet(`/api/ledgers/${id}/statement?${params}`);
 };
 export const fetchCashBank            = (body) => post('/cash-bank', body);
 
-// ─── Company Logo ────────────────────────────────────────────────────────────────────
-// ─── User Settings ──────────────────────────────────────────────────────────────
-export const getUserSettings    = () => request('GET', '/api/auth/user-settings');
-export const updateUserSettings = (data) => request('PATCH', '/api/auth/user-settings', data);
+// ─── User Settings / Company (root /api — not /app/api) ───────────────────────
+export const getUserSettings    = () => apiGet('/api/auth/user-settings');
+export const updateUserSettings = (data) => apiRequest('PATCH', '/api/auth/user-settings', data);
 
-export const fetchCompanyLogo    = (companyGuid) => request('GET',  `/api/company/${companyGuid}/logo`);
-export const uploadCompanyLogo   = (companyGuid, logo) => request('POST', `/api/company/${companyGuid}/logo`, { logo });
-export const updateCompanyProfile = (companyGuid, data) => request('PATCH', `/api/company/profile?companyGuid=${companyGuid}`, data);
+export const fetchCompanyLogo    = (companyGuid) => apiGet(`/api/company/${companyGuid}/logo`);
+export const uploadCompanyLogo   = (companyGuid, logo) => apiRequest('POST', `/api/company/${companyGuid}/logo`, { logo });
+export const updateCompanyProfile = (companyGuid, data) => apiRequest('PATCH', `/api/company/profile?companyGuid=${companyGuid}`, data);
 export const fetchReceivablesPayables = (body) => post('/receivables-payables', body);
 export const fetchExpenses            = (body) => post('/expenses', body);
 export const fetchGSTSummary          = (body) => post('/gst-summary', body);
 
 // ─── Tally Write API (creates vouchers/masters in Tally via desktop proxy) ────
-// Note: /tally/* routes are on root, not /app — use separate base URL
-const TALLY_BASE = import.meta.env.VITE_API_URL
-  ? import.meta.env.VITE_API_URL.replace('/app', '')
-  : 'http://localhost:3001';
-
 async function tallyRequest(endpoint, body) {
   const headers = { 'Content-Type': 'application/json' };
   const token = getToken();
@@ -187,10 +298,17 @@ const api = {
   fetchLedgers, fetchLedgerDetails, fetchLedgerVouchers, fetchVoucherDetail,
   // Stocks
   fetchStockSummary, fetchStockFilters, fetchStocks, fetchStockDetails, fetchParties,
+  fetchWarehouses, fetchPartiesList,
   // Vouchers & Reports
-  fetchVouchers, fetchDashboard, fetchReportsPL, fetchReportsBS,
+  fetchVouchers, fetchDashboard, fetchReportsPL, fetchReportsBS, fetchReportsTB, fyParamFromFY,
   fetchCashBank, fetchReceivablesPayables, fetchExpenses, fetchGSTSummary,
-  fetchCompanyLogo, uploadCompanyLogo,
+  fetchCompanyLogo, uploadCompanyLogo, updateCompanyProfile,
+  getUserSettings, updateUserSettings,
+  fetchLedgerFyBalances, fetchLedgerStatement,
+  // Registers
+  fetchSalesOrders, fetchPurchaseOrders, fetchCreditNotes, fetchDebitNotes, fetchDeliveryNotes,
+  fetchMyEntries, retryMyEntry, fetchAuditTrail, retryAuditEntry,
+  unwrapList,
   // Tally Write
   createSalesInvoice, createSalesOrder, createPurchaseInvoice, createPurchaseOrder,
   createPaymentVoucher, createReceiptVoucher, createJournalVoucher, createContraVoucher,
@@ -198,5 +316,5 @@ const api = {
   createPartyInTally, createWarehouseInTally, createStockItemInTally,
 };
 
-export { WS_URL };
+export { WS_URL, API_ROOT, TALLY_BASE, apiGet };
 export default api;

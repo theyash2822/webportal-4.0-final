@@ -27,6 +27,7 @@ const PurchaseModule = lazy(() => import('./pages/purchase/PurchaseModule'));
 const InventoryModule = lazy(() => import('./pages/inventory/InventoryModule'));
 const ExpensesModule = lazy(() => import('./pages/expenses/ExpensesModule'));
 const PaymentsModule = lazy(() => import('./pages/payments/PaymentsModule'));
+const Parties = lazy(() => import('./pages/Parties'));
 
 const PageLoader = () => (
   <div className="flex items-center justify-center h-screen">
@@ -90,6 +91,7 @@ function AppRoutes() {
             <Route path="inventory" element={<InventoryModule />} />
             <Route path="expenses" element={<ExpensesModule />} />
             <Route path="payments" element={<PaymentsModule />} />
+            <Route path="parties" element={<Parties />} />
           <Route path="financials/cash-bank" element={<CashBank />} />
           <Route path="financials/receivables-payables" element={<ReceivablesPayables />} />
           <Route path="financials/loans-ods" element={<LoansODs />} />

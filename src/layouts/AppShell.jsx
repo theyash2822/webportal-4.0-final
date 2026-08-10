@@ -175,6 +175,7 @@ const navGroups = [
       { label: 'Inventory',           icon: Package,       path: '/inventory' },
       { label: 'Expenses',            icon: Receipt,       path: '/expenses' },
       { label: 'Payments & Receipts', icon: CreditCard,    path: '/payments' },
+      { label: 'Parties',             icon: Building2,     path: '/parties' },
     ],
   },
   {
@@ -193,7 +194,7 @@ const navGroups = [
       { label: 'E-Way Bill',  icon: Truck,         path: '/compliance/eway-bill' },
       { label: 'E-Invoice',   icon: FileText,      path: '/compliance/einvoice' },
       { label: 'Other Taxes', icon: Receipt,       path: '/compliance/other-taxes' },
-      { label: 'Audit Trail', icon: ClipboardList, path: '/compliance/audit-trail' },
+      { label: 'Day Book', icon: ClipboardList, path: '/compliance/audit-trail' },
     ],
   },
   {
@@ -208,7 +209,7 @@ const navGroups = [
 ];
 
 const createMenu = [
-  { label: 'Sales',      items: ['Create Invoice','Create Quotation','Sales Order','Delivery Note','Credit Note'] },
+  { label: 'Sales',      items: ['Create Invoice','Sales Order','Delivery Note','Credit Note'] },
   { label: 'Purchase',   items: ['Purchase Invoice','Purchase Order','Debit Note'] },
   { label: 'Voucher',    items: ['Payment Voucher','Receipt Voucher','Contra Voucher','Journal Voucher'] },
   { label: 'Financials', items: ['Record Payment','Record Receipt','Record Expense'] },

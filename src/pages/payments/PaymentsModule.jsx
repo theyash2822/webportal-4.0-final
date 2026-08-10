@@ -1,133 +1,126 @@
 import { useState, useEffect } from 'react';
 import VoucherDetail from '../../components/VoucherDetail';
-import { CreditCard, ArrowUpRight, ArrowDownLeft, Search } from 'lucide-react';
+import { CreditCard, ArrowUpRight, ArrowDownLeft, Search, BookOpen, RefreshCw } from 'lucide-react';
 import KPICard from '../../components/KPICard';
 import Badge from '../../components/Badge';
 import Table from '../../components/Table';
 import Drawer from '../../components/Drawer';
-// No mock data
 import { useAuth } from '../../contexts/AuthContext';
-import api from '../../services/api';
+import api, { unwrapList } from '../../services/api';
 import { useSettings } from '../../contexts/SettingsContext';
-const fmt = n => n == null ? '—' : '₹' + Math.abs(Number(n)).toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 
-const TABS = ['Payments', 'Receipts'];
-const statusVariant = { Cleared: 'green', Pending: 'yellow', Reversed: 'red' };
+const TABS = ['Payments', 'Receipts', 'Journal', 'Contra'];
+const statusVariant = { Cleared: 'green', Pending: 'yellow', Reversed: 'red', Cancelled: 'red' };
 
-const paymentCols = [
+const mapV = (v) => ({
+  id: v.id,
+  voucher: v.voucher_number || v.voucherNumber || v.id,
+  party: v.party_name || v.partyName || '—',
+  date: v.date || '—',
+  amount: parseFloat(v.amount) || 0,
+  mode: 'Bank',
+  status: v.is_cancelled ? 'Cancelled' : 'Cleared',
+  ref: v.reference || '',
+  ledger: v.ledger_name || v.bank_ledger || '—',
+  voucherType: v.voucher_type || v.voucherType || '',
+});
+
+const baseCols = (amountColor) => [
   { key: 'date', label: 'Date', render: v => <span className="text-[#787774]">{v}</span> },
   { key: 'voucher', label: 'Voucher', render: v => <span className="font-mono text-xs text-[#1A1A1A] font-semibold">{v}</span> },
-  { key: 'party', label: 'Party' },
-  { key: 'ledger', label: 'Bank / Cash', render: v => <span className="text-xs text-[#787774]">{v}</span> },
-  { key: 'amount', label: 'Amount', render: v => <span className="font-semibold text-[#C0392B]">{fmt(v)}</span> },
-  { key: 'mode', label: 'Mode', render: v => <span className="text-xs text-[#787774]">{v}</span> },
+  { key: 'party', label: 'Party / Narration' },
+  { key: 'amount', label: 'Amount', render: v => <span className="font-semibold" style={{ color: amountColor }}>{v == null ? '—' : '₹' + Math.abs(Number(v)).toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</span> },
   { key: 'ref', label: 'Reference', render: v => v ? <span className="font-mono text-xs text-[#787774] truncate max-w-28 block">{v}</span> : <span className="text-[#AEACA8]">—</span> },
-  { key: 'status', label: 'Status', render: v => <Badge label={v} variant={statusVariant[v]} /> },
-];
-
-const receiptCols = [
-  { key: 'date', label: 'Date', render: v => <span className="text-[#787774]">{v}</span> },
-  { key: 'voucher', label: 'Voucher', render: v => <span className="font-mono text-xs text-[#1A1A1A] font-semibold">{v}</span> },
-  { key: 'party', label: 'Party' },
-  { key: 'ledger', label: 'Bank / Cash', render: v => <span className="text-xs text-[#787774]">{v}</span> },
-  { key: 'amount', label: 'Amount', render: v => <span className="font-semibold text-[#2D7D46]">{fmt(v)}</span> },
-  { key: 'mode', label: 'Mode', render: v => <span className="text-xs text-[#787774]">{v}</span> },
-  { key: 'ref', label: 'Reference', render: v => v ? <span className="font-mono text-xs text-[#787774]">{v.slice(0,16)}...</span> : <span className="text-[#AEACA8]">—</span> },
-  { key: 'status', label: 'Status', render: v => <Badge label={v} variant={statusVariant[v]} /> },
+  { key: 'status', label: 'Status', render: v => <Badge label={v} variant={statusVariant[v] || 'gray'} /> },
 ];
 
 export default function PaymentsModule() {
+  const { formatAmount } = useSettings();
+  const fmt = n => formatAmount(n || 0);
   const [tab, setTab] = useState(0);
   const [search, setSearch] = useState('');
   const [drawer, setDrawer] = useState(null);
   const [page, setPage] = useState(1);
-  const [realPayments, setRealPayments] = useState([]);
-  const [realReceipts, setRealReceipts] = useState([]);
+  const [rows, setRows] = useState([]);
   const [loading, setLoading] = useState(true);
-  const [error, setError]     = useState(null);
+  const [error, setError] = useState(null);
   const { selectedCompany, selectedFY, isPaired } = useAuth();
   const isDemo = !isPaired;
 
-  useEffect(() => {
-    setRealPayments([]); setRealReceipts([]);
+  const voucherType = ['Payment', 'Receipt', 'Journal', 'Contra'][tab];
+
+  const loadData = () => {
     if (!selectedCompany?.guid) { setLoading(false); return; }
     setLoading(true);
     setError(null);
-    Promise.all([
-      api.fetchVouchers({ companyGuid: selectedCompany.guid, voucherType: 'Payment', page: 1, pageSize: 100, fromDate: selectedFY?.startDate, toDate: selectedFY?.endDate }).catch(() => null),
-      api.fetchVouchers({ companyGuid: selectedCompany.guid, voucherType: 'Receipt', page: 1, pageSize: 100, fromDate: selectedFY?.startDate, toDate: selectedFY?.endDate }).catch(() => null),
-    ]).then(([p, r]) => {
-      const mapV = v => ({ id: v.id, voucher: v.voucher_number || v.id, party: v.party_name || '—', date: v.date || '—', amount: parseFloat(v.amount) || 0, mode: 'Bank', status: 'Cleared', ref: v.reference || '' });
-      if (p?.data?.vouchers?.length) setRealPayments(p.data.vouchers.map(mapV));
-      if (r?.data?.vouchers?.length) setRealReceipts(r.data.vouchers.map(mapV));
-    }).catch(err => {
-      setError(err?.response?.data?.message || err?.message || 'Failed to load payments data');
-    }).finally(() => setLoading(false));
-  }, [selectedCompany?.guid, selectedFY?.uniqueId]);
+    api.fetchVouchers({
+      companyGuid: selectedCompany.guid,
+      voucherType,
+      page: 1,
+      pageSize: 200,
+      fromDate: selectedFY?.startDate,
+      toDate: selectedFY?.endDate,
+    })
+      .then(res => setRows(unwrapList(res).map(mapV)))
+      .catch(err => {
+        setError(err?.message || 'Failed to load vouchers');
+        setRows([]);
+      })
+      .finally(() => setLoading(false));
+  };
 
-  const displayPayments = realPayments;
-  const displayReceipts = realReceipts;
-  const filteredPayments = displayPayments.filter(p => !search || (p.party||'').toLowerCase().includes(search.toLowerCase()) || (p.voucher||'').toLowerCase().includes(search.toLowerCase()));
-  const filteredReceipts = displayReceipts.filter(r => !search || (r.party||'').toLowerCase().includes(search.toLowerCase()) || (r.voucher||'').toLowerCase().includes(search.toLowerCase()));
+  useEffect(() => {
+    setRows([]); setPage(1); setSearch('');
+    loadData();
+  }, [selectedCompany?.guid, selectedFY?.uniqueId, tab]); // eslint-disable-line
 
+  const filtered = rows.filter(p =>
+    !search ||
+    (p.party || '').toLowerCase().includes(search.toLowerCase()) ||
+    (p.voucher || '').toLowerCase().includes(search.toLowerCase())
+  );
+
+  const cols = baseCols(tab === 0 ? '#C0392B' : tab === 1 ? '#2D7D46' : '#1A1A1A');
+  const emptyLabels = ['No payments found', 'No receipts found', 'No journal vouchers found', 'No contra vouchers found'];
+
+  // Keep payment/receipt KPIs from current tab when on those; otherwise total of current list
   return (
     <div className="space-y-5">
       {error && (
         <div className="flex items-center gap-3 px-4 py-3 rounded-xl bg-red-50 border border-red-200 text-red-700 text-xs">
           <span className="flex-shrink-0">⚠️</span>
           <span><strong>Error:</strong> {error}</span>
-          <button onClick={() => window.location.reload()} className="ml-auto underline font-medium">Retry</button>
+          <button onClick={loadData} className="ml-auto underline font-medium">Retry</button>
         </div>
       )}
       {isDemo && (
         <div className="flex items-center gap-3 px-4 py-2.5 rounded-xl bg-amber-50 border border-amber-200 text-amber-800 text-xs">
           <span className="text-base">🎭</span>
-          <span><strong>Demo Mode</strong> — Showing sample data. <a href="/settings?tab=integrations&sub=Tally+ERP+Sync" className="underline font-medium">Pair Desktop App →</a></span>
+          <span><strong>Demo Mode</strong> — Pair Desktop App for real Tally data. <a href="/settings?tab=integrations&sub=Tally+ERP+Sync" className="underline font-medium">Pair Desktop App →</a></span>
         </div>
       )}
-      <div>
-        <h1 className="text-xl font-semibold text-[#1A1A1A] tracking-tight">Payments & Receipts</h1>
-        <p className="text-sm text-[#787774] mt-0.5">{selectedFY?.name ? "FY " + selectedFY.name : "Current FY"}</p>
+      <div className="flex items-center justify-between">
+        <div>
+          <h1 className="text-xl font-semibold text-[#1A1A1A] tracking-tight">Payments & Vouchers</h1>
+          <p className="text-sm text-[#787774] mt-0.5">{selectedFY?.name ? 'FY ' + selectedFY.name : 'Current FY'} · {loading ? 'Loading...' : `${rows.length} ${voucherType.toLowerCase()} vouchers`}</p>
+        </div>
+        <button onClick={loadData} className="flex items-center gap-1.5 text-xs text-[#1A1A1A] font-medium hover:text-[#787774]">
+          <RefreshCw size={13} className={loading ? 'animate-spin' : ''} /> Refresh
+        </button>
       </div>
 
       <div className="grid grid-cols-4 gap-3">
-        <KPICard title="Total Payments"  value={loading ? '—' : fmt(displayPayments.reduce((s,p)=>s+(p.amount||0),0))} icon={ArrowUpRight}  accent="#C0392B" />
-        <KPICard title="Total Receipts"  value={loading ? '—' : fmt(displayReceipts.reduce((s,r)=>s+(r.amount||0),0))} icon={ArrowDownLeft} accent="#2D7D46" />
-        <KPICard title="Net Cash Flow"   value={loading ? '—' : fmt(displayReceipts.reduce((s,r)=>s+(r.amount||0),0) - displayPayments.reduce((s,p)=>s+(p.amount||0),0))} icon={CreditCard} accent="#1A1A1A" />
-        <KPICard title="Vouchers"        value={loading ? '—' : displayPayments.length + displayReceipts.length} icon={CreditCard} accent="#D97706" />
-      </div>
-
-      {/* Top parties */}
-      <div className="grid grid-cols-2 gap-4">
-        <div className="bg-white border border-[#D4D3CE] rounded-2xl p-5">
-          <p className="text-sm font-semibold text-[#1A1A1A] mb-3">Top Payment Parties</p>
-          <div className="space-y-2.5">
-            {displayPayments.slice(0,4).map((p,i) => (
-              <div key={i} className="flex justify-between items-center">
-                <span className="text-sm text-[#1A1A1A]">{p.party}</span>
-                <span className="text-sm font-semibold text-[#C0392B]">{fmt(p.amount)}</span>
-              </div>
-            ))}
-          </div>
-        </div>
-        <div className="bg-white border border-[#D4D3CE] rounded-2xl p-5">
-          <p className="text-sm font-semibold text-[#1A1A1A] mb-3">Top Receipt Parties</p>
-          <div className="space-y-2.5">
-            {displayReceipts.slice(0,4).map((r,i) => (
-              <div key={i} className="flex justify-between items-center">
-                <span className="text-sm text-[#1A1A1A]">{r.party}</span>
-                <span className="text-sm font-semibold text-[#2D7D46]">{fmt(r.amount)}</span>
-              </div>
-            ))}
-          </div>
-        </div>
+        <KPICard title="Total Amount" value={loading ? '—' : fmt(rows.reduce((s, p) => s + (p.amount || 0), 0))} icon={tab <= 1 ? (tab === 0 ? ArrowUpRight : ArrowDownLeft) : BookOpen} accent="#1A1A1A" />
+        <KPICard title="Vouchers" value={loading ? '—' : rows.length} icon={CreditCard} accent="#D97706" />
+        <KPICard title="Cleared" value={loading ? '—' : rows.filter(r => r.status === 'Cleared').length} icon={ArrowDownLeft} accent="#2D7D46" />
+        <KPICard title="Type" value={voucherType} icon={BookOpen} accent="#1A1A1A" />
       </div>
 
       <div className="bg-white border border-[#D4D3CE] rounded-2xl">
-        <div className="flex border-b border-[#D4D3CE] px-1 pt-1">
+        <div className="flex border-b border-[#D4D3CE] px-1 pt-1 overflow-x-auto">
           {TABS.map((t, i) => (
             <button key={i} onClick={() => setTab(i)}
-              className={`px-4 py-2.5 text-sm font-medium transition-colors rounded-t-lg mr-1 ${tab === i ? 'text-[#1A1A1A] bg-[#ECEEEF] font-semibold' : 'text-[#787774] hover:text-[#1A1A1A] hover:bg-[#F5F4EF]'}`}>{t}
+              className={`px-4 py-2.5 text-sm font-medium whitespace-nowrap transition-colors rounded-t-lg mr-1 ${tab === i ? 'text-[#1A1A1A] bg-[#ECEEEF] font-semibold' : 'text-[#787774] hover:text-[#1A1A1A] hover:bg-[#F5F4EF]'}`}>{t}
             </button>
           ))}
         </div>
@@ -139,29 +132,19 @@ export default function PaymentsModule() {
                 className="notion-input pl-8 w-full text-sm" />
             </div>
           </div>
-          {tab === 0 && (
+          {loading ? (
+            <div className="space-y-2">{[...Array(5)].map((_, i) => <div key={i} className="h-10 bg-[#F5F4EF] rounded-lg animate-pulse" />)}</div>
+          ) : filtered.length === 0 ? (
+            <div className="py-12 text-center text-[#AEACA8]"><p className="text-sm">{emptyLabels[tab]}</p></div>
+          ) : (
             <>
-              <Table columns={paymentCols} data={filteredPayments.slice((page-1)*25,page*25)} onRowClick={setDrawer} />
-              {filteredPayments.length > 25 && (
+              <Table columns={cols} data={filtered.slice((page - 1) * 25, page * 25)} onRowClick={setDrawer} />
+              {filtered.length > 25 && (
                 <div className="flex items-center justify-between pt-3 border-t border-[#ECEEEF] mt-2">
-                  <span className="text-xs text-[#AEACA8]">{filteredPayments.length} total</span>
+                  <span className="text-xs text-[#AEACA8]">{filtered.length} total</span>
                   <div className="flex gap-1">
-                    <button onClick={()=>setPage(p=>p-1)} disabled={page===1} className="px-3 py-1.5 text-xs border border-[#D4D3CE] rounded-lg disabled:opacity-40 hover:bg-[#F5F4EF]">← Prev</button>
-                    <button onClick={()=>setPage(p=>p+1)} disabled={page*25>=filteredPayments.length} className="px-3 py-1.5 text-xs border border-[#D4D3CE] rounded-lg disabled:opacity-40 hover:bg-[#F5F4EF]">Next →</button>
-                  </div>
-                </div>
-              )}
-            </>
-          )}
-          {tab === 1 && (
-            <>
-              <Table columns={receiptCols} data={filteredReceipts.slice((page-1)*25,page*25)} onRowClick={setDrawer} />
-              {filteredReceipts.length > 25 && (
-                <div className="flex items-center justify-between pt-3 border-t border-[#ECEEEF] mt-2">
-                  <span className="text-xs text-[#AEACA8]">{filteredReceipts.length} total</span>
-                  <div className="flex gap-1">
-                    <button onClick={()=>setPage(p=>p-1)} disabled={page===1} className="px-3 py-1.5 text-xs border border-[#D4D3CE] rounded-lg disabled:opacity-40 hover:bg-[#F5F4EF]">← Prev</button>
-                    <button onClick={()=>setPage(p=>p+1)} disabled={page*25>=filteredReceipts.length} className="px-3 py-1.5 text-xs border border-[#D4D3CE] rounded-lg disabled:opacity-40 hover:bg-[#F5F4EF]">Next →</button>
+                    <button onClick={() => setPage(p => p - 1)} disabled={page === 1} className="px-3 py-1.5 text-xs border border-[#D4D3CE] rounded-lg disabled:opacity-40 hover:bg-[#F5F4EF]">← Prev</button>
+                    <button onClick={() => setPage(p => p + 1)} disabled={page * 25 >= filtered.length} className="px-3 py-1.5 text-xs border border-[#D4D3CE] rounded-lg disabled:opacity-40 hover:bg-[#F5F4EF]">Next →</button>
                   </div>
                 </div>
               )}

@@ -14,6 +14,7 @@ import { useSettings } from '../../contexts/SettingsContext';
 const PAYMENT_TERMS = ['Paid / Due on Receipt', '15 Days', '30 Days', 'Custom'];
 
 export default function SalesInvoiceForm({ onClose }) {
+  const { fyMin, fyMax } = useFYDates();
   const { formatAmount, formatAmountCompact, formatDate } = useSettings();
   const { selectedCompany } = useAuth();
 

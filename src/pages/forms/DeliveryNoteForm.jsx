@@ -9,6 +9,7 @@ import { fetchLedgers, createDeliveryNote } from '../../services/api';
 import LiveSearch from '../../components/LiveSearch';
 
 export default function DeliveryNoteForm({ onClose }) {
+  const { fyMin, fyMax } = useFYDates();
   const { selectedCompany } = useAuth();
   const [submitted, setSubmitted] = useState(false);
   const [submitting, setSubmitting] = useState(false);

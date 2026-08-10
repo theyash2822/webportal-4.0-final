@@ -6,13 +6,13 @@ import Badge from '../../components/Badge';
 import Table from '../../components/Table';
 import Drawer from '../../components/Drawer';
 import { useAuth } from '../../contexts/AuthContext';
-import api from '../../services/api';
+import api, { unwrapList } from '../../services/api';
 import wsService from '../../services/websocket';
 import { useSettings } from '../../contexts/SettingsContext';
 
 const fmt = n => n == null ? '—' : '₹' + Math.abs(Number(n)).toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 
-const TABS = ['Items List', 'Stock Alerts'];
+const TABS = ['Items List', 'Stock Alerts', 'Warehouses'];
 
 const statusVariant = { Normal: 'green', 'Low Stock': 'yellow', 'Out of Stock': 'red' };
 
@@ -37,8 +37,29 @@ export default function InventoryModule() {
   const [page, setPage] = useState(1);
   const [total, setTotal] = useState(0);
   const [categories, setCategories] = useState(['All']);
+  const [warehouses, setWarehouses] = useState([]);
+  const [whLoading, setWhLoading] = useState(false);
   const pageSize = 50;
   const { selectedCompany, selectedFY } = useAuth();
+
+  const loadWarehouses = useCallback(async () => {
+    if (!selectedCompany?.guid) return;
+    setWhLoading(true);
+    try {
+      const res = await api.fetchWarehouses(selectedCompany.guid);
+      const list = unwrapList(res);
+      setWarehouses(list.map(w => ({
+        id: w.id || w.guid || w.name,
+        name: w.name || '—',
+        parent: w.parent || w.parent_name || '—',
+        address: w.address || w.godown_address || [w.address1, w.address2, w.city].filter(Boolean).join(', ') || '—',
+      })));
+    } catch {
+      setWarehouses([]);
+    } finally {
+      setWhLoading(false);
+    }
+  }, [selectedCompany?.guid]);
 
   const loadStocks = useCallback(async (pg = 1, searchText = '', cat = categoryFilter) => {
     if (!selectedCompany?.guid) return;
@@ -96,8 +117,16 @@ export default function InventoryModule() {
     setPage(1);
     setSearch('');
     setCategoryFilter('All');
-    if (selectedCompany?.guid) loadStocks(1, '', 'All');
+    setWarehouses([]);
+    if (selectedCompany?.guid) {
+      loadStocks(1, '', 'All');
+      loadWarehouses();
+    }
   }, [selectedCompany?.guid, selectedFY?.uniqueId]); // eslint-disable-line
+
+  useEffect(() => {
+    if (tab === 2 && selectedCompany?.guid) loadWarehouses();
+  }, [tab, selectedCompany?.guid]); // eslint-disable-line
 
   useEffect(() => {
     const unsub = wsService.on('synced', () => { if (selectedCompany?.guid) loadStocks(1, search, categoryFilter); });
@@ -278,6 +307,28 @@ export default function InventoryModule() {
                 ))
               )}
             </div>
+          )}
+
+          {tab === 2 && (
+            <>
+              {whLoading ? (
+                <div className="space-y-2">{[...Array(4)].map((_, i) => <div key={i} className="h-10 bg-[#F5F4EF] rounded-lg animate-pulse" />)}</div>
+              ) : warehouses.length === 0 ? (
+                <div className="py-12 text-center">
+                  <Warehouse size={28} className="mx-auto mb-2 text-[#D4D3CE]" />
+                  <p className="text-sm text-[#AEACA8]">No warehouses found</p>
+                </div>
+              ) : (
+                <Table
+                  columns={[
+                    { key: 'name', label: 'Name', render: v => <span className="font-medium text-[#1A1A1A]">{v}</span> },
+                    { key: 'parent', label: 'Parent', render: v => <span className="text-xs text-[#787774]">{v}</span> },
+                    { key: 'address', label: 'Address', render: v => <span className="text-xs text-[#787774]">{v}</span> },
+                  ]}
+                  data={warehouses}
+                />
+              )}
+            </>
           )}
         </div>
       </div>

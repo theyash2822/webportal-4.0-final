@@ -11,6 +11,7 @@ import LiveSearch from '../../components/LiveSearch';
 import { createPurchaseInvoice } from '../../services/api';
 
 export default function PurchaseInvoiceForm({ onClose }) {
+  const { fyMin, fyMax } = useFYDates();
   const { selectedCompany } = useAuth();
   const [submitted, setSubmitted] = useState(false);
   const [submitting, setSubmitting] = useState(false);

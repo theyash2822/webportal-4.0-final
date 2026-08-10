@@ -9,6 +9,7 @@ import { fetchLedgers, createDebitNote } from '../../services/api';
 import LiveSearch from '../../components/LiveSearch';
 
 export default function DebitNoteForm({ onClose }) {
+  const { fyMin, fyMax } = useFYDates();
   const { selectedCompany } = useAuth();
   const [submitted, setSubmitted] = useState(false);
   const [submitting, setSubmitting] = useState(false);

@@ -46,17 +46,19 @@ export default function Reports() {
   const { selectedCompany, token, selectedFY, isPaired } = useAuth();
   const [plReport, setPlReport] = useState(null);
   const [bsReport, setBsReport] = useState(null);
+  const [tbReport, setTbReport] = useState(null);
   const [loading, setLoading] = useState(true);
   const [error, setError]     = useState(null);
 
   useEffect(() => {
     setPlReport(null);
     setBsReport(null);
+    setTbReport(null);
     if (!selectedCompany?.guid) { setLoading(false); return; }
     setLoading(true);
     setError(null);
     // V2: pass fy= param for FY-specific balances
-    const fyParam = api.fyParamFromFY(selectedFY);  // e.g. '2025-2026'
+    const fyParam = selectedFY?.startDate ? (() => { const y = parseInt(selectedFY.startDate.slice(0, 4), 10); return `${y}-${y + 1}`; })() : null;
     const fyBody = {
       companyGuid: selectedCompany.guid,
       from: selectedFY?.startDate,
@@ -66,9 +68,11 @@ export default function Reports() {
     Promise.all([
       api.fetchReportsPL(fyBody),
       api.fetchReportsBS(fyBody),
-    ]).then(([pl, bs]) => {
+      api.fetchReportsTB(fyBody).catch(() => null),
+    ]).then(([pl, bs, tb]) => {
       if (pl?.data) setPlReport(pl.data);
       if (bs?.data) setBsReport(bs.data);
+      if (tb?.data) setTbReport(tb.data);
     }).catch(err => {
       setError(err?.response?.data?.message || err?.message || 'Failed to load reports data');
     }).finally(() => setLoading(false));
@@ -89,6 +93,12 @@ export default function Reports() {
 
   // Expense breakdown for chart — real data only, empty array if no data
   const expBreakdown = expenseRows.slice(0, 5).map(e => ({ name: (e.name||'').split(' ').slice(0,2).join(' '), value: Math.abs(parseFloat(e.closing_balance)||0) }));
+
+  // Profit trend — derive from monthlySales if available, else empty array
+  const profitTrend = (plReport?.monthlySales || []).map(m => ({
+    month: m.month,
+    profit: (m.sales ?? 0) - (m.purchase ?? 0),
+  }));
 
   return (
     <div className="space-y-5">
@@ -229,23 +239,36 @@ export default function Reports() {
                   ))}</tr>
                 </thead>
                 <tbody>
-                  {[...bsAssets, ...bsLiabilities].length === 0 ? (
-                    <tr><td colSpan={8} className="px-3 py-10 text-center text-xs text-[#AEACA8]">{isPaired ? 'No ledger data available' : 'Pair desktop app to see trial balance'}</td></tr>
-                  ) : [
-                    ...bsAssets.map(l => ({ ...l, side: 'Dr' })),
-                    ...bsLiabilities.map(l => ({ ...l, side: 'Cr' }))
-                  ].map((row, i) => (
-                    <tr key={i} className="border-b border-[#F5F4EF] hover:bg-[#F5F4EF]">
-                      <td className="px-3 py-2.5 font-medium text-[#1A1A1A]">{row.name}</td>
-                      <td className="px-3 py-2.5 text-[#787774]">{row.parent || '—'}</td>
-                      <td className="px-3 py-2.5 text-right">{row.side === 'Dr' ? fmt(parseFloat(row.opening_balance || 0)) : <span className="text-[#AEACA8]">—</span>}</td>
-                      <td className="px-3 py-2.5 text-right">{row.side === 'Cr' ? fmt(parseFloat(row.opening_balance || 0)) : <span className="text-[#AEACA8]">—</span>}</td>
-                      <td className="px-3 py-2.5 text-right text-[#AEACA8]">—</td>
-                      <td className="px-3 py-2.5 text-right text-[#AEACA8]">—</td>
-                      <td className="px-3 py-2.5 text-right">{row.side === 'Dr' ? fmt(parseFloat(row.closing_balance || 0)) : <span className="text-[#AEACA8]">—</span>}</td>
-                      <td className="px-3 py-2.5 text-right">{row.side === 'Cr' ? fmt(parseFloat(row.closing_balance || 0)) : <span className="text-[#AEACA8]">—</span>}</td>
-                    </tr>
-                  ))}
+                  {(() => {
+                    const tbRows = tbReport?.ledgers || tbReport?.rows || tbReport?.items || [];
+                    if (!tbRows.length) {
+                      return (
+                        <tr><td colSpan={8} className="px-3 py-10 text-center text-xs text-[#AEACA8]">{isPaired ? 'No trial balance data for this period' : 'Pair desktop app to see trial balance'}</td></tr>
+                      );
+                    }
+                    return tbRows.map((row, i) => {
+                      const opening = parseFloat(row.opening_balance ?? row.opening ?? 0) || 0;
+                      const closing = parseFloat(row.closing_balance ?? row.closing ?? 0) || 0;
+                      const periodDr = parseFloat(row.debit ?? row.period_dr ?? 0) || 0;
+                      const periodCr = parseFloat(row.credit ?? row.period_cr ?? 0) || 0;
+                      const openingDr = opening > 0 ? opening : 0;
+                      const openingCr = opening < 0 ? Math.abs(opening) : 0;
+                      const closingDr = closing > 0 ? closing : 0;
+                      const closingCr = closing < 0 ? Math.abs(closing) : 0;
+                      return (
+                        <tr key={i} className="border-b border-[#F5F4EF] hover:bg-[#F5F4EF]">
+                          <td className="px-3 py-2.5 font-medium text-[#1A1A1A]">{row.name || row.ledger || '—'}</td>
+                          <td className="px-3 py-2.5 text-[#787774]">{row.parent || row.group || '—'}</td>
+                          <td className="px-3 py-2.5 text-right">{openingDr ? fmt(openingDr) : <span className="text-[#AEACA8]">—</span>}</td>
+                          <td className="px-3 py-2.5 text-right">{openingCr ? fmt(openingCr) : <span className="text-[#AEACA8]">—</span>}</td>
+                          <td className="px-3 py-2.5 text-right">{periodDr ? fmt(periodDr) : <span className="text-[#AEACA8]">—</span>}</td>
+                          <td className="px-3 py-2.5 text-right">{periodCr ? fmt(periodCr) : <span className="text-[#AEACA8]">—</span>}</td>
+                          <td className="px-3 py-2.5 text-right">{closingDr ? fmt(closingDr) : <span className="text-[#AEACA8]">—</span>}</td>
+                          <td className="px-3 py-2.5 text-right">{closingCr ? fmt(closingCr) : <span className="text-[#AEACA8]">—</span>}</td>
+                        </tr>
+                      );
+                    });
+                  })()}
                 </tbody>
               </table>
             </div>

@@ -1,13 +1,12 @@
 import { useState, useEffect, useCallback } from 'react';
 import { ClipboardList, Plus, Edit, Trash2, Search, RefreshCw, WifiOff, CheckCircle2, XCircle, Clock, RotateCcw } from 'lucide-react';
-import { fetchAuditTrail, retryAuditEntry } from '../../services/api';
 import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer } from 'recharts';
 import KPICard from '../../components/KPICard';
 import Badge from '../../components/Badge';
 import Table from '../../components/Table';
 import Drawer from '../../components/Drawer';
 import { useAuth } from '../../contexts/AuthContext';
-import api from '../../services/api';
+import api, { unwrapList } from '../../services/api';
 import wsService from '../../services/websocket';
 import { useSettings } from '../../contexts/SettingsContext';
 
@@ -40,15 +39,20 @@ export default function AuditTrail() {
   const [loading, setLoading] = useState(true);
   const [search, setSearch] = useState('');
   const [typeFilter, setTypeFilter] = useState('All');
-  const [fromDate, setFromDate] = useState('');
-  const [toDate, setToDate] = useState('');
   const { selectedCompany, token, selectedFY } = useAuth();
+  const [fromDate, setFromDate] = useState(selectedFY?.startDate || '');
+  const [toDate, setToDate] = useState(selectedFY?.endDate || '');
   const [myEntries, setMyEntries] = useState([]);
   const [myStats, setMyStats] = useState(null);
   const [myLoading, setMyLoading] = useState(false);
   const [myError, setMyError] = useState(null);
   const [myFilter, setMyFilter] = useState('all');
   const [retrying, setRetrying] = useState({});
+
+  useEffect(() => {
+    if (selectedFY?.startDate) setFromDate(selectedFY.startDate);
+    if (selectedFY?.endDate) setToDate(selectedFY.endDate);
+  }, [selectedFY?.uniqueId, selectedFY?.startDate, selectedFY?.endDate]);
 
   const loadData = async () => {
     if (!token || !selectedCompany?.guid) { setLoading(false); return; }
@@ -59,10 +63,10 @@ export default function AuditTrail() {
         page: 1,
         pageSize: 500,
         searchText: search,
-        fromDate: fromDate || undefined,
-        toDate: toDate || undefined,
+        fromDate: fromDate || selectedFY?.startDate || undefined,
+        toDate: toDate || selectedFY?.endDate || undefined,
       });
-      const list = res?.data?.vouchers || [];
+      const list = unwrapList(res);
       setVouchers(list);
     } catch (err) {
       console.warn('Vouchers fetch error:', err.message);
@@ -72,7 +76,7 @@ export default function AuditTrail() {
     }
   };
 
-  useEffect(() => { loadData(); }, [selectedCompany?.guid, token, fromDate, toDate]);
+  useEffect(() => { loadData(); }, [selectedCompany?.guid, token, fromDate, toDate, selectedFY?.uniqueId]);
   useEffect(() => {
     const unsub = wsService.on('synced', () => loadData());
     return unsub;
@@ -90,24 +94,73 @@ export default function AuditTrail() {
     return s && t && d1 && d2;
   });
 
+  const mapMyEntry = (e) => {
+    let status = e.status || e._queue_status || 'pending';
+    if (status === 'posted' || status === 'success') status = 'success';
+    if (status === 'processing') status = 'pending';
+    return {
+      id: e._queue_id || e.id,
+      entry_type: e.entry_type || e.voucher_type || e.current_entry_type,
+      entry_label: e.entry_label || e.party_name || e.voucher_number || '—',
+      status,
+      amount: e.amount,
+      tally_voucher_number: e.tally_voucher_number || e.av_tally_voucher_no || e.voucher_number,
+      created_at: e.created_at || e.av_created_at,
+      source: e.source || 'web',
+      error_message: e.error_message || e._queue_error,
+    };
+  };
+
   const loadMyEntries = useCallback(() => {
     if (!selectedCompany?.guid) return;
     setMyLoading(true);
     setMyError(null);
-    fetchAuditTrail({ companyGuid: selectedCompany.guid, status: myFilter === 'all' ? undefined : myFilter, limit: 100, ...(selectedFY ? { from: selectedFY.startDate, to: selectedFY.endDate } : {}) })
-      .then(res => { if (res?.data) { setMyEntries(res.data.entries || []); setMyStats(res.data.stats); } })
-      .catch(e => setMyError(e?.message || 'Failed to load'))
+    const params = {
+      limit: 100,
+      ...(selectedFY ? { from: selectedFY.startDate, to: selectedFY.endDate } : {}),
+    };
+    api.fetchMyEntries(selectedCompany.guid, params)
+      .then(res => {
+        // Mobile contract: posted in data[], queue rows in pending[]
+        const posted = Array.isArray(res?.data) ? res.data : unwrapList(res);
+        const pending = Array.isArray(res?.pending) ? res.pending : [];
+        let mapped = [...pending, ...posted].map(mapMyEntry);
+        if (myFilter !== 'all') mapped = mapped.filter(e => e.status === myFilter);
+        setMyEntries(mapped);
+        setMyStats(res?.stats || null);
+      })
+      .catch(() =>
+        api.fetchAuditTrail({
+          companyGuid: selectedCompany.guid,
+          status: myFilter === 'all' ? undefined : myFilter,
+          limit: 100,
+        })
+          .then(res => {
+            const entries = (res?.data?.entries || unwrapList(res)).map(mapMyEntry);
+            setMyEntries(myFilter === 'all' ? entries : entries.filter(e => e.status === myFilter));
+            setMyStats(res?.data?.stats);
+          })
+          .catch(e => setMyError(e?.message || 'Failed to load'))
+      )
       .finally(() => setMyLoading(false));
-  }, [selectedCompany?.guid, myFilter]);
+  }, [selectedCompany?.guid, myFilter, selectedFY?.startDate, selectedFY?.endDate]);
 
   useEffect(() => { if (tab === 1) loadMyEntries(); }, [tab, loadMyEntries]);
 
   const retryEntry = async (id) => {
     setRetrying(r => ({ ...r, [id]: true }));
-    retryAuditEntry(id)
-      .then(() => loadMyEntries())
-      .catch(e => setMyError(e?.message))
-      .finally(() => setRetrying(r => ({ ...r, [id]: false })));
+    try {
+      try {
+        await api.retryMyEntry(id);
+      } catch {
+        await api.retryAuditEntry(id);
+      }
+      loadMyEntries();
+    } catch (e) {
+      setMyError(e?.message);
+    } finally {
+      setRetrying(r => ({ ...r, [id]: false }));
+    }
   };
 
   const STATUS_CFG = {
@@ -149,7 +202,7 @@ export default function AuditTrail() {
     <div className="space-y-5">
       <div className="flex justify-between items-center">
         <div>
-          <h1 className="text-xl font-semibold text-[#1A1A1A] tracking-tight">Audit Trail</h1>
+          <h1 className="text-xl font-semibold text-[#1A1A1A] tracking-tight">Day Book</h1>
           <p className="text-sm text-[#787774] mt-0.5">
             {selectedCompany?.name || 'No company'} · {loading ? 'Loading...' : `${vouchers.length} vouchers`}
           </p>
