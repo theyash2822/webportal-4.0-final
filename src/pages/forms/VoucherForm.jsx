@@ -4,7 +4,7 @@ import { FormField, Input, Select, SectionTitle, Textarea } from '../../componen
 import SummaryFooter from '../../components/SummaryFooter';
 import { CheckCircle, AlertCircle } from 'lucide-react';
 import { useAuth } from '../../contexts/AuthContext';
-import { fetchLedgers } from '../../services/api';
+import { fetchLedgers, fetchPartiesList, fetchBankLedgers as fetchBankLedgersAPI, unwrapList } from '../../services/api';
 import LiveSearch from '../../components/LiveSearch';
 import { createPaymentVoucher, createReceiptVoucher, createJournalVoucher, createContraVoucher } from '../../services/api';
 import { useSettings } from '../../contexts/SettingsContext';
@@ -18,16 +18,47 @@ export default function VoucherForm({ onClose, initialType = 'Payment' }) {
 
   const fetchAllLedgers = useCallback(async (q) => {
     if (!selectedCompany?.guid) return [];
-    const res = await fetchLedgers({ companyGuid: selectedCompany.guid, searchText: q, pageSize: 20 });
+    const res = await fetchLedgers({ companyGuid: selectedCompany.guid, searchText: q || '', pageSize: 30 });
     return (res?.data?.ledgers || []).map(l => ({ label: l.name, value: l.name, sub: l.parent || '', badge: l.balance_type }));
   }, [selectedCompany?.guid]);
 
+  const fetchParties = useCallback(async (q) => {
+    if (!selectedCompany?.guid) return [];
+    try {
+      const res = await fetchPartiesList(selectedCompany.guid, { search: q || '', searchText: q || '', limit: 30 });
+      const list = unwrapList(res);
+      if (list.length) {
+        return list.map(l => ({
+          label: l.name,
+          value: l.name,
+          sub: l.parent || l.parent_name || l.type || '',
+        }));
+      }
+    } catch { /* fall through */ }
+    return fetchAllLedgers(q);
+  }, [selectedCompany?.guid, fetchAllLedgers]);
+
   const fetchBankLedgers = useCallback(async (q) => {
     if (!selectedCompany?.guid) return [];
-    const res = await fetchLedgers({ companyGuid: selectedCompany.guid, searchText: q || 'bank', pageSize: 15 });
-    return (res?.data?.ledgers || [])
-      .filter(l => ['bank','cash','wallet'].some(k => (l.parent||'').toLowerCase().includes(k) || (l.name||'').toLowerCase().includes(k)))
-      .map(l => ({ label: l.name, value: l.name, sub: l.parent || '' }));
+    try {
+      const res = await fetchBankLedgersAPI(selectedCompany.guid, 'all');
+      const list = unwrapList(res);
+      const mapped = list.map(l => ({
+        label: l.name,
+        value: l.name,
+        sub: l.type || l.parent || '',
+        badge: l.balance != null ? String(l.balance) : undefined,
+      }));
+      const qq = (q || '').trim().toLowerCase();
+      if (!qq) return mapped;
+      return mapped.filter(l => l.label.toLowerCase().includes(qq) || (l.sub || '').toLowerCase().includes(qq));
+    } catch {
+      const res = await fetchLedgers({ companyGuid: selectedCompany.guid, searchText: q || 'bank', pageSize: 30 });
+      return (res?.data?.ledgers || [])
+        .filter(l => ['bank', 'cash', 'wallet'].some(k =>
+          (l.parent || '').toLowerCase().includes(k) || (l.name || '').toLowerCase().includes(k)))
+        .map(l => ({ label: l.name, value: l.name, sub: l.parent || '' }));
+    }
   }, [selectedCompany?.guid]);
   const [submitted, setSubmitted] = useState(false);
   const [submitting, setSubmitting] = useState(false);
@@ -61,7 +92,7 @@ export default function VoucherForm({ onClose, initialType = 'Payment' }) {
       const base = {
         companyGuid: selectedCompany.guid,
         companyName: selectedCompany.name,
-        date: date.replace(/-/g, ''),
+        date: date,
         narration,
         reference,
         amount: numAmount,
@@ -71,10 +102,14 @@ export default function VoucherForm({ onClose, initialType = 'Payment' }) {
       let result;
       if (type === 'Payment') {
         if (!partyLedger || !bankLedger) { setError('Party and bank/cash ledger required'); setSubmitting(false); return; }
-        result = await createPaymentVoucher({ ...base, partyLedger, bankLedger });
+        result = await createPaymentVoucher({
+          ...base, partyLedger, bankLedger, ledgerAccount: bankLedger, paymentMethod: 'Cash',
+        });
       } else if (type === 'Receipt') {
         if (!partyLedger || !bankLedger) { setError('Party and bank/cash ledger required'); setSubmitting(false); return; }
-        result = await createReceiptVoucher({ ...base, partyLedger, bankLedger });
+        result = await createReceiptVoucher({
+          ...base, partyLedger, bankLedger, ledgerAccount: bankLedger, paymentMethod: 'Cash',
+        });
       } else if (type === 'Journal') {
         if (!drLedger || !crLedger) { setError('Dr and Cr ledger required'); setSubmitting(false); return; }
         result = await createJournalVoucher({ ...base, drLedger, crLedger });
@@ -168,12 +203,20 @@ export default function VoucherForm({ onClose, initialType = 'Payment' }) {
       {(type === 'Payment' || type === 'Receipt') && (
         <div className="grid grid-cols-1 gap-4">
           <FormField label={type === 'Payment' ? 'Pay To (Party)' : 'Receive From (Party)'} required>
-            <LiveSearch value={partyLedger} onChange={setPartyLedger}
-              placeholder="Party name exactly as in Tally" />
+            <LiveSearch
+              value={partyLedger}
+              onChange={setPartyLedger}
+              placeholder="Search party / ledger..."
+              fetchFn={fetchParties}
+            />
           </FormField>
           <FormField label={type === 'Payment' ? 'Pay From (Bank/Cash)' : 'Deposit To (Bank/Cash)'} required>
-            <LiveSearch value={bankLedger} onChange={setBankLedger}
-              placeholder="e.g. HDFC Bank A/C or Cash" />
+            <LiveSearch
+              value={bankLedger}
+              onChange={setBankLedger}
+              placeholder="Search bank / cash ledger..."
+              fetchFn={fetchBankLedgers}
+            />
           </FormField>
         </div>
       )}

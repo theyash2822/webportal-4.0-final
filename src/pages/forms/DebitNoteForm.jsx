@@ -39,7 +39,7 @@ export default function DebitNoteForm({ onClose }) {
     try {
       const result = await createDebitNote({
         companyGuid: selectedCompany.guid, companyName: selectedCompany.name,
-        date: date.replace(/-/g, ''), partyLedger,
+        date: date, partyLedger,
         amount: subtotal,
         items: items.filter(i => i.name).map(i => ({ itemName: i.name, billedQty: parseFloat(i.qty)||1, rate: parseFloat(i.rate)||0, amount: parseFloat(i.amount)||0 })),
         narration, reference, isOptional,

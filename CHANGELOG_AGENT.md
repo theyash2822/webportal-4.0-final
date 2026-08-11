@@ -4,6 +4,45 @@ Format: Date | Task | Files Changed | Behavior Changed | Tested | Risks
 
 ---
 
+## 2026-08-10 | Sales invoice ledgers + warehouse qty
+Files changed: `SalesInvoiceForm.jsx`, `ItemsTable.jsx`, `api.js`
+Behavior changed:
+- Party search uses `GET /api/parties` (same as mobile, up to 500) instead of thin POST `/app/parties`
+- Sales ledger uses `GET /api/sales/ledger-accounts` (full Sales Accounts list)
+- Per-item warehouse loads `GET /api/stocks/items/:id/godowns` and shows qty labels (e.g. Sitapura (12 Pcs))
+Tested: build
+Risks: godowns with zero qty are hidden by backend (qty>0 filter) — empty warehouse list if item has no godown stock
+
+---
+
+## 2026-08-10 | Payment/Receipt ledger search blank
+Files changed: `VoucherForm.jsx`, `api.js` (`fetchBankLedgers`)
+Behavior changed: Payment/Receipt LiveSearch had no `fetchFn` (Journal/Contra did) — wired party search + `GET /api/bank-ledgers` (same as mobile)
+Tested: build
+Risks: none
+
+---
+
+## 2026-08-10 | QA: sales totalAmount excludes UI tax when taxes:[]
+Files changed: `SalesInvoiceForm.jsx`
+Behavior changed: With `taxes: []`, `totalAmount` is now `subtotal + logistics` (not UI taxAmt) so party Dr matches inventory/sales lines
+Tested: build (Testing Agent)
+Risks: Summary footer still shows estimated tax for UX; Tally voucher posts without GST ledgers until tax picker exists
+
+---
+
+## 2026-08-10 | Fix portal sales → Tally failures (portal only — no backend)
+Files changed: `SalesInvoiceForm.jsx` (+ other forms date ISO)
+Behavior changed:
+- Portal sales sent `-totalAmount` (party Cr instead of Dr), fake `CGST`/`SGST` ledgers, and `YYYYMMDD` dates → Tally rejected
+- Sales payload now matches mobile: positive total, `voucherType: Sales`, ISO date, no invented tax ledgers; per-item warehouse required
+- QA fix: with `taxes: []`, `totalAmount` = subtotal + logistics only (don’t include UI-estimated tax in party amount)
+- Backend left unchanged (mobile already worked)
+Tested: write_queue forensics 244/246/247; build; QA YELLOW
+Risks: Portal sales still omit GST tax lines until real tax-ledger picker is added
+
+---
+
 ## 2026-08-10 | Remove remaining mock data
 Files changed: deleted `src/data/{mockData,salesMock,purchaseMock,inventoryMock,paymentsMock,expensesMock}.js`; `ItemsTable.jsx`, `SalesInvoiceForm.jsx`, `InvoicePDF.jsx`, `QuotationForm.jsx`, `Settings.jsx`, `KNOWN_ISSUES.md`, `FRONTEND_MAP.md`
 Behavior changed:

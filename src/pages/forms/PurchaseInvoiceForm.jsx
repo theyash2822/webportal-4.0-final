@@ -55,7 +55,7 @@ export default function PurchaseInvoiceForm({ onClose }) {
     try {
       const result = await createPurchaseInvoice({
         companyGuid: selectedCompany.guid, companyName: selectedCompany.name,
-        date: invoiceDate.replace(/-/g, ''), partyLedger,
+        date: invoiceDate, partyLedger,
         purchaseLedger: purchaseLedger,
         items: items.filter(i => i.name).map(i => ({
           itemName: i.name, billedQty: parseFloat(i.qty) || 1,

@@ -51,7 +51,7 @@ export default function PurchaseOrderForm({ onClose }) {
     try {
       const result = await createPurchaseOrder({
         companyGuid: selectedCompany.guid, companyName: selectedCompany.name,
-        date: orderDate.replace(/-/g, ''), partyLedger,
+        date: orderDate, partyLedger,
         salesLedger,
         items: items.filter(i => i.name).map(i => ({
           itemName: i.name, billedQty: parseFloat(i.qty) || 1,

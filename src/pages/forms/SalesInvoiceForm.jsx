@@ -6,7 +6,7 @@ import LogisticsSection from '../../components/LogisticsSection';
 import SummaryFooter from '../../components/SummaryFooter';
 import { CheckCircle, AlertCircle, Printer } from 'lucide-react';
 import { useAuth } from '../../contexts/AuthContext';
-import { createSalesInvoice, fetchLedgers, fetchStocks, fetchParties as fetchPartiesAPI } from '../../services/api';
+import { createSalesInvoice, fetchLedgers, fetchPartiesList, fetchSalesLedgerAccounts, unwrapList } from '../../services/api';
 import InvoicePDF from '../../components/InvoicePDF';
 import LiveSearch from '../../components/LiveSearch';
 import { useSettings } from '../../contexts/SettingsContext';
@@ -18,22 +18,62 @@ export default function SalesInvoiceForm({ onClose }) {
   const { formatAmount, formatAmountCompact, formatDate } = useSettings();
   const { selectedCompany } = useAuth();
 
-  // Live search fetch functions using real company data
+  // Same as mobile: GET /api/parties (all Sundry Debtors/Creditors ledgers, up to 500)
   const fetchParties = useCallback(async (q) => {
     if (!selectedCompany?.guid) return [];
-    const res = await fetchPartiesAPI({ companyGuid: selectedCompany.guid, searchText: q || '', pageSize: 30 });
-    return (res?.data?.parties || []).map(l => ({
-      label: l.name, value: l.name,
-      sub: l.parent || '',
-    }));
+    try {
+      const res = await fetchPartiesList(selectedCompany.guid, {
+        search: q || '',
+        type: 'customer',
+      });
+      const list = unwrapList(res);
+      if (list.length) {
+        return list.map(l => ({
+          label: l.name,
+          value: l.name,
+          sub: l.parent || '',
+          badge: l.gstin ? 'GST' : '',
+        }));
+      }
+    } catch { /* fall through */ }
+    // Fallback: any ledger search
+    const res = await fetchLedgers({
+      companyGuid: selectedCompany.guid,
+      searchText: q || '',
+      pageSize: 100,
+    });
+    return (res?.data?.ledgers || [])
+      .filter(l => {
+        const p = (l.parent || '').toLowerCase();
+        return p.includes('debtor') || p.includes('creditor') || !q;
+      })
+      .map(l => ({ label: l.name, value: l.name, sub: l.parent || '' }));
   }, [selectedCompany?.guid]);
 
+  // Same as mobile: GET /api/sales/ledger-accounts (full Sales Accounts list)
   const fetchSalesLedgers = useCallback(async (q) => {
     if (!selectedCompany?.guid) return [];
-    const res = await fetchLedgers({ companyGuid: selectedCompany.guid, searchText: q || 'Sales', pageSize: 15 });
-    return (res?.data?.ledgers || [])
-      .filter(l => (l.parent || '').toLowerCase().includes('sales') || (l.name || '').toLowerCase().includes('sales'))
-      .map(l => ({ label: l.name, value: l.name, sub: l.parent || '' }));
+    try {
+      const res = await fetchSalesLedgerAccounts(selectedCompany.guid);
+      const list = unwrapList(res);
+      const mapped = list.map(l => ({
+        label: l.name,
+        value: l.name,
+        sub: l.parent || 'Sales Accounts',
+      }));
+      const qq = (q || '').trim().toLowerCase();
+      if (!qq) return mapped;
+      return mapped.filter(l => l.label.toLowerCase().includes(qq));
+    } catch {
+      const res = await fetchLedgers({
+        companyGuid: selectedCompany.guid,
+        searchText: q || '',
+        pageSize: 100,
+      });
+      return (res?.data?.ledgers || [])
+        .filter(l => (l.parent || '').toLowerCase().includes('sales') || (l.name || '').toLowerCase().includes('sales'))
+        .map(l => ({ label: l.name, value: l.name, sub: l.parent || '' }));
+    }
   }, [selectedCompany?.guid]);
   const [submitted, setSubmitted] = useState(false);
   const [submitting, setSubmitting] = useState(false);
@@ -64,6 +104,8 @@ export default function SalesInvoiceForm({ onClose }) {
     if (!partyLedger) { setError('Please select a customer / party'); return; }
     if (!salesLedger) { setError('Please select a sales ledger (e.g. Sales, Sales Account GST)'); return; }
     if (items.length === 0 || !items[0]?.name) { setError('Please add at least one item'); return; }
+    const missingWh = items.filter(i => i.name && !(i.warehouse || warehouse));
+    if (missingWh.length) { setError('Please select a warehouse for each item'); return; }
     if (!selectedCompany) { setError('No company selected'); return; }
 
     setError('');
@@ -73,11 +115,16 @@ export default function SalesInvoiceForm({ onClose }) {
       const payload = {
         companyGuid: selectedCompany.guid,
         companyName: selectedCompany.name,
-        date: invoiceDate.replace(/-/g, ''),
+        // Backend expects ISO YYYY-MM-DD (mobile parity). YYYYMMDD breaks app_vouchers date insert.
+        date: invoiceDate,
         narration,
         reference,
         partyLedger,
-        totalAmount: -total, // negative for party Dr
+        // Positive party total — backend writes party as -totalAmount (Dr).
+        // Exclude UI-estimated taxAmt while taxes:[] (no tax ledger lines) so XML balances.
+        // When a real tax-ledger picker lands, include taxAmt again and populate taxes[].
+        totalAmount: subtotal + logTotal,
+        voucherType: 'Sales',
         isOptional,
         items: items.filter(i => i.name).map(i => ({
           itemName: i.name,
@@ -89,12 +136,10 @@ export default function SalesInvoiceForm({ onClose }) {
           tax: i.tax || '18%',
           amount: i.amount,
           salesLedger,
-          godown: warehouse || '',
+          godown: i.warehouse || warehouse || '',
         })),
-        taxes: taxAmt > 0 ? [
-          { ledgerName: 'CGST', taxAmount: Math.round(taxAmt / 2), taxableValue: subtotal },
-          { ledgerName: 'SGST', taxAmount: Math.round(taxAmt / 2), taxableValue: subtotal },
-        ] : [],
+        // Do not invent tax ledger names (CGST/SGST). Mobile sends real ledgers only.
+        taxes: [],
         logistics: logistics.filter(l => l.amount > 0).map(l => ({ ledgerName: l.type || 'Freight', amount: l.amount })),
       };
 

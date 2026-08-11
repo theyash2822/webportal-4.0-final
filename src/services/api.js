@@ -204,6 +204,22 @@ export const fetchPartiesList = async (companyGuid, params = {}) => {
   }
 };
 
+/** Same as mobile getBankLedgers — GET /api/bank-ledgers?type=bank|cash|all */
+export const fetchBankLedgers = (companyGuid, type = 'all') =>
+  apiGet(withCompany('/api/bank-ledgers', companyGuid, { type }));
+
+/** Same as mobile getSalesLedgerAccounts */
+export const fetchSalesLedgerAccounts = (companyGuid) =>
+  apiGet(withCompany('/api/sales/ledger-accounts', companyGuid));
+
+/** Same as mobile getPurchaseLedgerAccounts */
+export const fetchPurchaseLedgerAccounts = (companyGuid) =>
+  apiGet(withCompany('/api/purchase/ledger-accounts', companyGuid));
+
+/** Same as mobile getStockGodowns — per-warehouse qty for a stock item (guid or name) */
+export const fetchStockGodowns = (companyGuid, stockIdOrName) =>
+  apiGet(withCompany(`/api/stocks/items/${encodeURIComponent(stockIdOrName)}/godowns`, companyGuid));
+
 // ─── Dashboard ────────────────────────────────────────────────────────────────
 export const fetchDashboard = (body) => post('/dashboard', body);
 
@@ -298,7 +314,8 @@ const api = {
   fetchLedgers, fetchLedgerDetails, fetchLedgerVouchers, fetchVoucherDetail,
   // Stocks
   fetchStockSummary, fetchStockFilters, fetchStocks, fetchStockDetails, fetchParties,
-  fetchWarehouses, fetchPartiesList,
+  fetchWarehouses, fetchPartiesList, fetchBankLedgers,
+  fetchSalesLedgerAccounts, fetchPurchaseLedgerAccounts, fetchStockGodowns,
   // Vouchers & Reports
   fetchVouchers, fetchDashboard, fetchReportsPL, fetchReportsBS, fetchReportsTB, fyParamFromFY,
   fetchCashBank, fetchReceivablesPayables, fetchExpenses, fetchGSTSummary,
