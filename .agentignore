@@ -1,0 +1,13 @@
+node_modules/
+dist/
+.env
+.env.*
+*.log
+src/data/
+
+# Sibling repos — never read from inside td-web-portal
+../td-backend/
+../tallydekho-mobile-V4/
+../td-source/
+../td-website/
+../tallydekho-brain/
