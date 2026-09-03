@@ -1,117 +1,76 @@
-import { lazy, Suspense, Component } from 'react';
-import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom';
+import { Component } from 'react';
+import { BrowserRouter, Routes, Route, Navigate, useLocation } from 'react-router-dom';
 import { AuthProvider, useAuth } from './contexts/AuthContext';
 import { SettingsProvider } from './contexts/SettingsContext';
+import { DrawerStackProvider } from './components/kit';
 import AppShell from './layouts/AppShell';
+import ModuleLayout, {
+  INVENTORY_SECTIONS, SETTINGS_SECTIONS, FINANCIALS_TABS, COMPLIANCE_TABS, AUDIT_TRAIL_TABS, PURCHASE_TABS, VOUCHER_TABS,
+} from './layouts/ModuleLayout';
 
-const Login = lazy(() => import('./pages/auth/Login'));
-const OTPScreen = lazy(() => import('./pages/auth/OTPScreen'));
-const GetStarted = lazy(() => import('./pages/auth/GetStarted'));
-const TallySync  = lazy(() => import('./pages/auth/TallySync'));
-const Notifications = lazy(() => import('./pages/Notifications'));
-const Dashboard = lazy(() => import('./pages/Dashboard'));
-const CashBank = lazy(() => import('./pages/financials/CashBank'));
-const ReceivablesPayables = lazy(() => import('./pages/financials/ReceivablesPayables'));
-const LoansODs = lazy(() => import('./pages/financials/LoansODs'));
-const Reports = lazy(() => import('./pages/financials/Reports'));
-const GST = lazy(() => import('./pages/compliance/GST'));
-const EWayBill = lazy(() => import('./pages/compliance/EWayBill'));
-const EInvoice = lazy(() => import('./pages/compliance/EInvoice'));
-const OtherTaxes = lazy(() => import('./pages/compliance/OtherTaxes'));
-const AuditTrail = lazy(() => import('./pages/compliance/AuditTrail'));
-const Ledgers = lazy(() => import('./pages/Ledgers'));
-const AIInsights = lazy(() => import('./pages/AIInsights'));
-const Settings = lazy(() => import('./pages/Settings'));
-const SalesModule = lazy(() => import('./pages/sales/SalesModule'));
-const PurchaseModule = lazy(() => import('./pages/purchase/PurchaseModule'));
-const InventoryModule = lazy(() => import('./pages/inventory/InventoryModule'));
-const ExpensesModule = lazy(() => import('./pages/expenses/ExpensesModule'));
-const PaymentsModule = lazy(() => import('./pages/payments/PaymentsModule'));
-const Parties = lazy(() => import('./pages/Parties'));
+import Login from './pages/auth/Login';
+import Dashboard from './pages/Dashboard';
+import * as S from './pages/sales.jsx';
+import * as P from './pages/purchase.jsx';
+import * as V from './pages/vouchers.jsx';
+import * as I from './pages/inventory.jsx';
+import * as F from './pages/financials.jsx';
+import * as C from './pages/compliance.jsx';
+import * as M from './pages/masters.jsx';
+import * as G from './pages/settings.jsx';
+import Onboarding from './pages/Onboarding';
+import DocumentViewer from './pages/DocumentViewer';
+import CashflowReport from './pages/CashflowReport';
+import { isOnboardingDone } from './utils/onboardingNav';
 
-const PageLoader = () => (
-  <div className="flex items-center justify-center h-screen">
-    <div className="w-6 h-6 border-2 border-[#1A1A1A] border-t-transparent rounded-full animate-spin" />
-  </div>
-);
-
-// Error boundary - catches render crashes and shows a friendly error
 class ErrorBoundary extends Component {
-  constructor(props) { super(props); this.state = { hasError: false, error: '' }; }
-  static getDerivedStateFromError(err) { return { hasError: true, error: err.message }; }
-  componentDidCatch(err) { console.error('[TallyDekho] Render error:', err.message); }
+  constructor(p) { super(p); this.state = { error: null }; }
+  static getDerivedStateFromError(error) { return { error }; }
   render() {
-    if (this.state.hasError) {
-      return (
-        <div style={{display:'flex',flexDirection:'column',alignItems:'center',justifyContent:'center',height:'100vh',gap:16,fontFamily:'sans-serif'}}>
-          <div style={{fontSize:32}}>⚠️</div>
-          <div style={{fontSize:16,fontWeight:600,color:'#1A1A1A'}}>Something went wrong</div>
-          <div style={{fontSize:12,color:'#787774',maxWidth:300,textAlign:'center'}}>{this.state.error}</div>
-          <button onClick={()=>{ localStorage.clear(); window.location.href='/auth/login'; }}
-            style={{padding:'8px 20px',background:'#1A1A1A',color:'white',border:'none',borderRadius:8,cursor:'pointer',fontSize:14}}>
-            Back to Login
-          </button>
-        </div>
-      );
-    }
-    return this.props.children;
+    if (!this.state.error) return this.props.children;
+    return (
+      <div className="flex min-h-screen flex-col items-center justify-center gap-4 bg-paper px-6">
+        <p className="text-base font-semibold text-ink">Something went wrong</p>
+        <p className="max-w-md text-center text-[13px] text-ink-soft">{this.state.error.message}</p>
+        <button
+          onClick={() => { localStorage.clear(); window.location.href = '/login'; }}
+          className="h-10 rounded-md bg-ink px-5 text-[13px] font-semibold text-white"
+        >
+          Back to sign in
+        </button>
+      </div>
+    );
   }
 }
 
-// Protect routes — redirect to login if not authenticated
-function ProtectedRoute({ children }) {
-  const { token } = useAuth();
-  if (!token) return <Navigate to="/auth/login" replace />;
+function Protected({ children }) {
+  const { token, authBootstrapping } = useAuth();
+  if (!token) return <Navigate to="/login" replace />;
+  if (authBootstrapping) {
+    return (
+      <div className="flex min-h-screen flex-col items-center justify-center gap-3 bg-paper">
+        <div className="h-8 w-8 animate-spin rounded-full border-2 border-line border-t-ink" />
+        <p className="text-[13px] text-ink-soft">Loading your workspace…</p>
+      </div>
+    );
+  }
   return children;
 }
-
-// Redirect already-logged-in users away from auth pages (login only)
-function AuthRoute({ children }) {
-  const { token } = useAuth();
-  if (token) return <Navigate to="/" replace />;
-  return children;
+function PublicOnly({ children }) {
+  const { token, authBootstrapping } = useAuth();
+  if (authBootstrapping || !token) return children;
+  const dest = sessionStorage.getItem('td.postAuthPath') || '/';
+  sessionStorage.removeItem('td.postAuthPath');
+  return <Navigate to={dest} replace />;
 }
 
-function AppRoutes() {
-  return (
-    <Suspense fallback={<PageLoader />}>
-      <Routes>
-        {/* Auth routes */}
-        <Route path="/auth/login" element={<AuthRoute><Login /></AuthRoute>} />
-        {/* OTP page: NO AuthRoute wrapper - login() sets token here, AuthRoute would race-redirect */}
-        <Route path="/auth/otp" element={<OTPScreen />} />
-        <Route path="/auth/get-started" element={<ProtectedRoute><GetStarted /></ProtectedRoute>} />
-        <Route path="/auth/tally-sync"   element={<ProtectedRoute><TallySync  /></ProtectedRoute>} />
-
-        {/* Protected app routes */}
-        <Route path="/" element={<ProtectedRoute><AppShell /></ProtectedRoute>}>
-          <Route index element={<Dashboard />} />
-            <Route path="sales" element={<SalesModule />} />
-            <Route path="purchase" element={<PurchaseModule />} />
-            <Route path="inventory" element={<InventoryModule />} />
-            <Route path="expenses" element={<ExpensesModule />} />
-            <Route path="payments" element={<PaymentsModule />} />
-            <Route path="parties" element={<Parties />} />
-          <Route path="financials/cash-bank" element={<CashBank />} />
-          <Route path="financials/receivables-payables" element={<ReceivablesPayables />} />
-          <Route path="financials/loans-ods" element={<LoansODs />} />
-          <Route path="financials/reports" element={<Reports />} />
-          <Route path="compliance/gst" element={<GST />} />
-          <Route path="compliance/eway-bill" element={<EWayBill />} />
-          <Route path="compliance/einvoice" element={<EInvoice />} />
-          <Route path="compliance/other-taxes" element={<OtherTaxes />} />
-          <Route path="compliance/audit-trail" element={<AuditTrail />} />
-          <Route path="ledgers" element={<Ledgers />} />
-          <Route path="ai-insights" element={<AIInsights />} />
-          <Route path="settings" element={<Settings />} />
-            <Route path="notifications" element={<Notifications />} />
-        </Route>
-
-        {/* Fallback */}
-        <Route path="*" element={<Navigate to="/" replace />} />
-      </Routes>
-    </Suspense>
-  );
+function OnboardingGate({ children }) {
+  const { user } = useAuth();
+  const location = useLocation();
+  if (!isOnboardingDone(user) && !location.pathname.startsWith('/onboarding')) {
+    return <Navigate to="/onboarding" replace />;
+  }
+  return children;
 }
 
 export default function App() {
@@ -120,7 +79,147 @@ export default function App() {
       <ErrorBoundary>
         <AuthProvider>
           <SettingsProvider>
-            <AppRoutes />
+            <DrawerStackProvider>
+              <Routes>
+                <Route path="/login" element={<PublicOnly><Login /></PublicOnly>} />
+                <Route path="/auth/login" element={<Navigate to="/login" replace />} />
+                <Route path="/auth/otp" element={<Navigate to="/login" replace />} />
+                <Route path="/auth/get-started" element={<Protected><Navigate to="/settings/company" replace /></Protected>} />
+                <Route path="/auth/tally-sync" element={<Protected><Navigate to="/settings/tally-sync" replace /></Protected>} />
+                <Route path="/onboarding" element={<Protected><Onboarding /></Protected>} />
+
+                <Route path="/" element={<Protected><OnboardingGate><AppShell /></OnboardingGate></Protected>}>
+                  <Route index element={<Dashboard />} />
+                  <Route path="kpi/:key" element={<Dashboard />} />
+
+                  <Route path="sales" element={<S.SalesLayout />}>
+                    <Route index element={<S.SalesInvoices />} />
+                    <Route path="register" element={<S.SalesRegister />} />
+                    <Route path="orders" element={<S.SalesOrders />} />
+                    <Route path="credit-notes" element={<S.CreditNotes />} />
+                    <Route path="delivery-notes" element={<S.DeliveryNotes />} />
+                    <Route path="proforma" element={<S.Proforma />} />
+                    <Route path="quotations" element={<S.Quotations />} />
+                    <Route path="einvoice" element={<C.EInvoice />} />
+                    <Route path="eway-bill" element={<S.SalesEwayBill />} />
+                  </Route>
+
+                  <Route path="purchase" element={<ModuleLayout title="Purchase" tabs={PURCHASE_TABS} Kpis={P.PurchaseKpis} />}>
+                    <Route index element={<P.PurchaseInvoices />} />
+                    <Route path="register" element={<P.PurchaseRegister />} />
+                    <Route path="orders" element={<P.PurchaseOrders />} />
+                    <Route path="debit-notes" element={<P.DebitNotes />} />
+                  </Route>
+
+                  <Route path="vouchers" element={<ModuleLayout title="Vouchers" tabs={VOUCHER_TABS} Kpis={V.VoucherKpis} />}>
+                    <Route index element={<V.AllVouchers />} />
+                    <Route path="payment" element={<V.PaymentVouchers />} />
+                    <Route path="receipt" element={<V.ReceiptVouchers />} />
+                    <Route path="journal" element={<V.JournalVouchers />} />
+                    <Route path="contra" element={<V.ContraVouchers />} />
+                  </Route>
+
+                  <Route path="inventory" element={<ModuleLayout title="Inventory" sections={INVENTORY_SECTIONS} />}>
+                    <Route index element={<I.InventoryOverview />} />
+                    <Route path="items" element={<I.StockItems />} />
+                    <Route path="items/:id" element={<I.StockItems />} />
+                    <Route path="warehouses" element={<I.Warehouses />} />
+                    <Route path="warehouses/:id" element={<I.Warehouses />} />
+                    <Route path="stock-ledger" element={<I.StockLedger />} />
+                    <Route path="transfers" element={<I.Transfers />} />
+                    <Route path="transfers/:id" element={<I.Transfers />} />
+                    <Route path="adjustments" element={<I.Adjustments />} />
+                    <Route path="on-hand" element={<I.OnHandStock />} />
+                    <Route path="negative-stock" element={<I.NegativeStock />} />
+                    <Route path="aged-items" element={<I.AgedItems />} />
+                    <Route path="fast-slow" element={<I.FastSlow />} />
+                    <Route path="reorder-queue" element={<I.ReorderQueue />} />
+                    <Route path="movement-analytics" element={<I.MovementAnalytics />} />
+                    <Route path="valuation-summary" element={<I.ValuationSummary />} />
+                    <Route path="expiry-schedule" element={<I.ExpirySchedule />} />
+                    <Route path="snapshot" element={<I.StockSnapshot />} />
+                    <Route path="barcodes" element={<I.Barcodes />} />
+                    <Route path="print-barcodes" element={<I.PrintBarcodes />} />
+                    <Route path="label-preview" element={<I.LabelPreview />} />
+                    <Route path="print-settings" element={<I.PrintSettings />} />
+                    <Route path="reports" element={<I.StockReports />} />
+                    <Route path="settings" element={<I.StockSettings />} />
+                  </Route>
+
+                  <Route path="financials" element={<ModuleLayout title="Financials" tabs={FINANCIALS_TABS} Kpis={F.FinancialsKpis} />}>
+                    <Route index element={<Navigate to="/financials/overview" replace />} />
+                    <Route path="overview" element={<F.FinancialOverview />} />
+                    <Route path="profit-loss" element={<F.ProfitLoss />} />
+                    <Route path="balance-sheet" element={<F.BalanceSheet />} />
+                    <Route path="trial-balance" element={<F.TrialBalance />} />
+                    <Route path="cash-register" element={<F.CashRegister />} />
+                    <Route path="cash-bank" element={<Navigate to="/kpi/bank-balance" replace />} />
+                    <Route path="receivables-payables" element={<Navigate to="/kpi/receivables" replace />} />
+                    <Route path="loans-ods" element={<Navigate to="/kpi/loans-ods" replace />} />
+                    <Route path="cashflow" element={<Navigate to="/cashflow-report" replace />} />
+                    <Route path="cashflow-report" element={<CashflowReport />} />
+                    <Route path="document/:id" element={<DocumentViewer />} />
+                    <Route path="reports/*" element={<Navigate to="/financials/overview" replace />} />
+                  </Route>
+
+                  <Route path="compliance" element={<ModuleLayout title="Compliance" tabs={COMPLIANCE_TABS} Kpis={C.ComplianceKpis} />}>
+                    <Route index element={<Navigate to="/compliance/gst" replace />} />
+                    <Route path="gst" element={<C.GST />} />
+                    <Route path="alerts" element={<C.ComplianceAlerts />} />
+                    <Route path="other-taxes" element={<C.OtherTaxes />} />
+                    <Route path="tax-register" element={<Navigate to="/compliance/other-taxes" replace />} />
+                    <Route path="einvoice" element={<C.EInvoice />} />
+                    <Route path="einvoice-coverage" element={<C.EInvoiceCoverage />} />
+                    <Route path="eway-bill" element={<C.EWayBill />} />
+                    <Route path="eway-bill-coverage" element={<C.EWayBillCoverage />} />
+                  </Route>
+
+                  <Route path="audit-trail" element={<ModuleLayout title="Audit Trail" tabs={AUDIT_TRAIL_TABS} testid="audit-trail-module" />}>
+                    <Route index element={<M.AuditTrail />} />
+                    <Route path="daybook" element={<M.DayBook />} />
+                  </Route>
+
+                  <Route path="expenses" element={<M.Expenses />} />
+                  <Route path="payments" element={<M.PaymentsReceipts />} />
+                  <Route path="parties" element={<M.Parties />} />
+                  <Route path="ledgers" element={<M.Ledgers />} />
+                  <Route path="ai-insights" element={<M.AIInsights />} />
+
+                  <Route path="notifications" element={<Navigate to="/" replace />} />
+                  <Route path="daybook" element={<Navigate to="/audit-trail/daybook" replace />} />
+                  <Route path="compliance/daybook" element={<Navigate to="/audit-trail/daybook" replace />} />
+                  <Route path="compliance/audit-trail" element={<Navigate to="/audit-trail" replace />} />
+                  <Route path="expenses/register" element={<Navigate to="/expenses" replace />} />
+                  <Route path="parties/:id" element={<Navigate to="/parties" replace />} />
+                  <Route path="ledgers/:id" element={<Navigate to="/ledgers" replace />} />
+
+                  <Route path="settings" element={<ModuleLayout title="Settings" sections={SETTINGS_SECTIONS} testid="settings-module" />}>
+                    <Route index element={<Navigate to="/settings/profile" replace />} />
+                    <Route path="profile" element={<G.SettingsProfile />} />
+                    <Route path="company" element={<G.SettingsCompany />} />
+                    <Route path="license" element={<G.SettingsLicense />} />
+                    <Route path="tally-sync" element={<G.SettingsTallySync />} />
+                    <Route path="bank-feeds" element={<G.SettingsBankFeeds />} />
+                    <Route path="security" element={<G.SettingsSecurity />} />
+                    <Route path="preferences" element={<G.SettingsPreferences />} />
+                    <Route path="currency" element={<G.SettingsCurrency />} />
+                    <Route path="language" element={<G.SettingsLanguage />} />
+                    <Route path="notification-channels" element={<G.SettingsNotificationChannels />} />
+                    <Route path="payment-reminders" element={<G.SettingsPaymentReminders />} />
+                    <Route path="compliance-reminders" element={<G.SettingsComplianceReminders />} />
+                    <Route path="stock-alerts" element={<G.SettingsStockAlerts />} />
+                    <Route path="voucher-config" element={<G.SettingsVoucherConfig />} />
+                    <Route path="einvoice" element={<G.SettingsEInvoice />} />
+                    <Route path="ewb" element={<G.SettingsEWB />} />
+                    <Route path="barcodes" element={<G.SettingsBarcodes />} />
+                    <Route path="help" element={<G.SettingsHelp />} />
+                    <Route path="about" element={<G.SettingsAbout />} />
+                  </Route>
+                </Route>
+
+                <Route path="*" element={<Navigate to="/" replace />} />
+              </Routes>
+            </DrawerStackProvider>
           </SettingsProvider>
         </AuthProvider>
       </ErrorBoundary>

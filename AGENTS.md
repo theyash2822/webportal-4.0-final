@@ -26,7 +26,8 @@ Only allowed when user explicitly says: **DO FULL CODEBASE REVIEW**
 - Do not use mock data — always wire to live API
 - src/data/*.js mock files exist but should not be used for display data
 - All API calls go through `src/services/api.js`
-- All data fetching uses `useApi()` hook from `src/hooks/useApi.js`
+- **Mobile API parity:** Web must use the same `/api/*` routes as `tallydekho-mobile-V4` for the same screen. Do not add web-only backend routes or duplicate aggregations when mobile already has an endpoint. Extra web UI panels should derive from existing mobile APIs (e.g. top customers from sales invoices, cost breakdown from `/api/expenses`).
+- Data fetching: prefer page-local loaders / `api.*` from `src/services/api.js` (legacy `useApi` hook removed)
 - State: AuthContext (token, user, companies, selectedCompany, selectedFY, isPaired)
 - Do not expose secrets (.env, tokens)
 

@@ -1,104 +1,80 @@
-/**
- * TallyDekho Design System — Web Portal
- * Reference: Dribbble CRM Dashboard (cream base, white cards, black active)
- * Semantic: Notion-style calm — muted green/red/amber, never harsh
- */
+import tailwindcssAnimate from 'tailwindcss-animate';
+
+/** @type {import('tailwindcss').Config} */
 export default {
-  content: ['./index.html', './src/**/*.{js,ts,jsx,tsx}'],
+  darkMode: ['class'],
+  content: ['./index.html', './src/**/*.{js,jsx,ts,tsx}'],
   theme: {
     extend: {
-      colors: {
-        // ─── Surface ──────────────────────────────────────────────────────
-        surface: {
-          bg:      '#F5F4EF',   // warm cream — page background
-          card:    '#FFFFFF',   // pure white — cards, panels
-          hover:   '#F0EFE9',   // warm hover
-          active:  '#E8E7E1',   // pressed/selected bg
-          inverse: '#1A1A1A',   // dark surfaces — active nav pill, tooltips
-        },
-
-        // ─── Ink (text) ───────────────────────────────────────────────────
-        ink: {
-          primary:   '#1A1A1A',  // headings, primary data
-          secondary: '#787774',  // labels, body text (Notion exact)
-          tertiary:  '#AEACA8',  // placeholder, disabled
-          inverse:   '#FFFFFF',  // text on dark bg
-        },
-
-        // ─── Border ───────────────────────────────────────────────────────
-        line: {
-          DEFAULT:  '#E9E8E3',   // standard warm border
-          strong:   '#D4D3CE',   // focused, emphasized
-          subtle:   '#F0EFE9',   // inner dividers
-        },
-
-        // ─── Brand (used only for specific interactive CTAs) ───────────────
-        brand: {
-          DEFAULT:  '#1A1A1A',   // CTA buttons = black (matches reference)
-          hover:    '#333333',
-        },
-
-        // ─── Semantic — calm Notion-style ──────────────────────────────────
-        // Muted, never harsh. Green for positive, red for negative.
-        positive: {
-          DEFAULT:  '#15803D',   // calm forest green
-          bg:       '#F0FDF4',   // very light green bg
-          border:   '#BBF7D0',
-          text:     '#166534',
-        },
-        negative: {
-          DEFAULT:  '#DC2626',   // calm red
-          bg:       '#FEF2F2',   // very light red bg
-          border:   '#FECACA',
-          text:     '#991B1B',
-        },
-        caution: {
-          DEFAULT:  '#D97706',   // calm amber
-          bg:       '#FFFBEB',
-          border:   '#FDE68A',
-          text:     '#92400E',
-        },
-        info: {
-          DEFAULT:  '#2563EB',   // calm blue
-          bg:       '#EFF6FF',
-          border:   '#BFDBFE',
-          text:     '#1D4ED8',
-        },
-      },
-
       fontFamily: {
-        sans: ['Inter', 'system-ui', '-apple-system', 'sans-serif'],
+        display: ['var(--font-display)'],
+        sans: ['var(--font-display)'],
+        mono: ['var(--font-mono)'],
       },
-
       fontSize: {
-        'xs':   ['11px', { lineHeight: '16px' }],
-        'sm':   ['13px', { lineHeight: '20px' }],
-        'base': ['14px', { lineHeight: '22px' }],
-        'lg':   ['17px', { lineHeight: '26px' }],
-        'xl':   ['20px', { lineHeight: '28px' }],
-        '2xl':  ['24px', { lineHeight: '32px' }],
+        xs: ['11px', '1.45'],
+        sm: ['13px', '1.5'],
+        base: ['15px', '1.5'],
+        lg: ['17px', '1.35'],
+        xl: ['20px', '1.3'],
+        '2xl': ['24px', '1.25'],
+        '3xl': ['30px', '1.15'],
+        '4xl': ['36px', '1.1'],
       },
-
-      boxShadow: {
-        'xs':  '0 1px 2px rgba(0,0,0,0.04)',
-        'sm':  '0 1px 4px rgba(0,0,0,0.06)',
-        'md':  '0 4px 12px rgba(0,0,0,0.07)',
-        'lg':  '0 8px 24px rgba(0,0,0,0.09)',
-        'xl':  '0 16px 40px rgba(0,0,0,0.11)',
-        // legacy aliases
-        'notion':    '0 1px 3px rgba(0,0,0,0.05)',
-        'notion-md': '0 4px 12px rgba(0,0,0,0.07)',
-        'notion-lg': '0 8px 24px rgba(0,0,0,0.09)',
+      colors: {
+        paper: { DEFAULT: 'var(--paper)', 2: 'var(--paper-2)' },
+        surface: 'var(--surface)',
+        cream: { DEFAULT: '#F0EFE9', hover: '#E8E7E1', active: '#E8E7E1' },
+        ink: {
+          DEFAULT: 'var(--ink)',
+          soft: '#787774',
+          faint: '#AEACA8',
+          wash: 'rgba(26,26,26,0.05)',
+        },
+        line: {
+          DEFAULT: 'var(--rule)',
+          strong: 'var(--rule-strong)',
+          subtle: 'var(--rule-soft)',
+        },
+        pos: { DEFAULT: 'var(--pos)', bg: 'var(--pos-bg)' },
+        neg: { DEFAULT: 'var(--neg)', bg: 'var(--neg-bg)' },
+        warn: { DEFAULT: 'var(--warn)', bg: 'var(--warn-bg)' },
+        note: { DEFAULT: 'var(--note)', bg: 'var(--note-bg)' },
+        gold: { DEFAULT: 'var(--gold)', bg: 'var(--gold-bg)' },
+        alert: '#C0392B',
+        background: 'hsl(var(--background))',
+        foreground: 'hsl(var(--foreground))',
+        card: { DEFAULT: 'hsl(var(--card))', foreground: 'hsl(var(--card-foreground))' },
+        popover: { DEFAULT: 'hsl(var(--popover))', foreground: 'hsl(var(--popover-foreground))' },
+        primary: { DEFAULT: 'hsl(var(--primary))', foreground: 'hsl(var(--primary-foreground))' },
+        secondary: { DEFAULT: 'hsl(var(--secondary))', foreground: 'hsl(var(--secondary-foreground))' },
+        muted: { DEFAULT: 'hsl(var(--muted))', foreground: 'hsl(var(--muted-foreground))' },
+        accent: { DEFAULT: 'hsl(var(--accent))', foreground: 'hsl(var(--accent-foreground))' },
+        destructive: { DEFAULT: 'hsl(var(--destructive))', foreground: 'hsl(var(--destructive-foreground))' },
+        border: 'hsl(var(--border))',
+        input: 'hsl(var(--input))',
+        ring: 'hsl(var(--ring))',
       },
-
       borderRadius: {
-        'sm':  '6px',
-        'md':  '8px',
-        'lg':  '10px',
-        'xl':  '12px',
-        '2xl': '16px',
+        none: '0', sm: '4px', DEFAULT: '6px', md: '6px', lg: '10px', xl: '14px', '2xl': '16px', '3xl': '20px', full: '9999px',
+      },
+      boxShadow: {
+        none: 'none',
+        xs: '0 1px 2px rgba(26,26,26,0.04)',
+        sm: '0 1px 3px rgba(26,26,26,0.05)',
+        md: '0 6px 20px rgba(26,26,26,0.06)',
+        lg: '0 16px 44px rgba(26,26,26,0.10)',
+        xl: '0 28px 70px rgba(26,26,26,0.14)',
+      },
+      keyframes: {
+        'accordion-down': { from: { height: '0' }, to: { height: 'var(--radix-accordion-content-height)' } },
+        'accordion-up': { from: { height: 'var(--radix-accordion-content-height)' }, to: { height: '0' } },
+      },
+      animation: {
+        'accordion-down': 'accordion-down 0.2s ease-out',
+        'accordion-up': 'accordion-up 0.2s ease-out',
       },
     },
   },
-  plugins: [],
-}
+  plugins: [tailwindcssAnimate],
+};

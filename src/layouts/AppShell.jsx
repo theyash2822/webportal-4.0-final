@@ -1,413 +1,542 @@
-import { useState, useRef, useEffect } from 'react';
+import { useState, useEffect, useMemo, useRef, useCallback } from 'react';
 import { NavLink, Outlet, useLocation, useNavigate } from 'react-router-dom';
 import {
-  LayoutDashboard, Landmark, ArrowLeftRight, CreditCard, FileBarChart2,
-  ShieldCheck, Truck, FileText, Receipt, BookOpen, ClipboardList,
-  Sparkles, Settings, ChevronDown, ChevronRight, Menu, Bell, Building2,
-  Search, Plus, Check, TrendingUp, ShoppingCart, Package, LogOut
+  LayoutDashboard, TrendingUp, ShoppingCart, Package, Receipt,
+  Landmark, ArrowLeftRight, FileBarChart2, ShieldCheck, Truck, FileText, ClipboardList,
+  BookOpen, Sparkles, Bell, Settings as SettingsIcon, ChevronDown, ChevronRight, Menu, X,
+  Search, Plus, Check, Wallet, LogOut, User, CornerDownLeft, PanelLeftClose, PanelLeft, Zap, Unplug,
 } from 'lucide-react';
-import CreateModal from '../components/CreateModal';
 import { useAuth } from '../contexts/AuthContext';
-import SyncStatus from '../components/SyncStatus';
-import GlobalSearch from '../components/GlobalSearch';
+import { CreateDrawer, CreateContext } from '../components/create/CreateDrawer';
+import { useNotifications } from '../services/notifications';
+import { useClickOutside, useLabelT } from '../components/kit';
+import NotificationDrawer from '../components/NotificationDrawer';
+import OfflineBadge from '../components/OfflineBadge';
+import api from '../services/api';
+import { useTranslation } from 'react-i18next';
 
-// ─── User Menu ────────────────────────────────────────────────────────────────
-function UserMenu({ user, onLogout }) {
-  const [open, setOpen] = useState(false);
-  const ref = useRef(null);
-  useEffect(() => {
-    const h = e => { if (ref.current && !ref.current.contains(e.target)) setOpen(false); };
-    document.addEventListener('mousedown', h);
-    return () => document.removeEventListener('mousedown', h);
-  }, []);
-  const displayName = user?.name || user?.mobile || 'Account';
-  const initials = displayName.split(' ').map(w => w[0]).join('').toUpperCase().slice(0, 2) || 'U';
+// Portal nav labels → shared mobile translation keys (untranslated labels stay English).
+const NAV_I18N = {
+  Dashboard: 'nav.dashboard', Sales: 'nav.sales', Purchase: 'nav.purchase',
+  Inventory: 'portalNav.inventory', Ledgers: 'portalNav.ledgers', Settings: 'nav.settings',
+  Financials: 'portalNav.financials', Transactions: 'portalNav.transactions',
+  Vouchers: 'portalNav.vouchers', Expenses: 'portalNav.expenses',
+  Compliance: 'portalNav.compliance', 'AI Insights': 'portalNav.aiInsights',
+  'Audit Trail': 'portalNav.auditTrail',
+  Books: 'portalNav.books',
+};
 
-  return (
-    <div className="relative" ref={ref}>
-      <button
-        onClick={() => setOpen(p => !p)}
-        className="flex items-center gap-2 px-2 py-1.5 rounded-lg hover:bg-[#F5F4EF] transition-colors"
-      >
-        <div className="w-6 h-6 rounded-full bg-[#1A1A1A] flex items-center justify-center text-white text-[10px] font-semibold flex-shrink-0">
-          {initials}
-        </div>
-        <span className="text-xs font-medium text-[#1A1A1A] max-w-[80px] truncate hidden sm:block">
-          {displayName.split(' ')[0]}
-        </span>
-        <ChevronDown size={11} className="text-[#AEACA8]" />
-      </button>
-
-      {open && (
-        <div className="absolute top-full right-0 mt-1.5 w-52 bg-white border border-[#E9E8E3] rounded-xl shadow-lg z-50 py-1 overflow-hidden">
-          <div className="px-4 py-3 border-b border-[#F5F4EF]">
-            <p className="text-sm font-semibold text-[#1A1A1A] truncate">{displayName}</p>
-            <p className="text-xs text-[#AEACA8] mt-0.5 truncate">{user?.mobile || user?.email || ''}</p>
-          </div>
-          <button className="w-full text-left px-4 py-2.5 text-sm text-[#787774] hover:bg-[#F5F4EF] hover:text-[#1A1A1A] transition-colors">Profile</button>
-          <button className="w-full text-left px-4 py-2.5 text-sm text-[#787774] hover:bg-[#F5F4EF] hover:text-[#1A1A1A] transition-colors">Settings</button>
-          <div className="border-t border-[#F5F4EF] mt-1 pt-1">
-            <button
-              onClick={() => { setOpen(false); onLogout(); }}
-              className="w-full flex items-center gap-2 px-4 py-2.5 text-sm text-[#C0392B] hover:bg-[#FEF2F2] transition-colors"
-            >
-              <LogOut size={13} /> Sign out
-            </button>
-          </div>
-        </div>
-      )}
-    </div>
-  );
-}
-
-// ─── FY Selector (global top bar) ──────────────────────────────────────────────
-function FYSelector() {
-  const [open, setOpen] = useState(false);
-  const { selectedCompany, selectedFY, selectFY } = useAuth();
-  const ref = useRef(null);
-
-  useEffect(() => {
-    const h = e => { if (ref.current && !ref.current.contains(e.target)) setOpen(false); };
-    document.addEventListener('mousedown', h);
-    return () => document.removeEventListener('mousedown', h);
-  }, []);
-
-  const years = selectedCompany?.years || [];
-  const currentFY = selectedFY || years[years.length - 1];
-
-  if (!currentFY && years.length === 0) return null;
-
-  return (
-    <div className="relative" ref={ref}>
-      <button
-        onClick={() => setOpen(p => !p)}
-        className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg border border-[#E9E8E3] hover:bg-[#F5F4EF] transition-colors text-xs font-medium text-[#1A1A1A]"
-      >
-        <span className="text-[10px] text-[#AEACA8] font-normal">FY</span>
-        <span className="font-semibold">{currentFY?.name || '2025-26'}</span>
-        <ChevronDown size={11} className={`text-[#AEACA8] transition-transform ${open ? 'rotate-180' : ''}`} />
-      </button>
-
-      {open && (
-        <div className="absolute top-full right-0 mt-1.5 w-44 bg-white border border-[#E9E8E3] rounded-xl shadow-lg z-50 py-1 overflow-hidden">
-          <p className="px-3 pt-2 pb-1 text-[10px] font-semibold text-[#AEACA8] uppercase tracking-widest">Financial Year</p>
-          {years.length === 0 && (
-            <p className="px-3 py-2 text-xs text-[#AEACA8]">Sync desktop to load years</p>
-          )}
-          {[...years].reverse().map(y => (
-            <button
-              key={y.uniqueId}
-              onClick={() => { selectFY(y); setOpen(false); }}
-              className="w-full flex items-center justify-between px-3 py-2 hover:bg-[#F5F4EF] transition-colors text-left"
-            >
-              <span className="text-sm text-[#1A1A1A]">FY {y.name}</span>
-              {currentFY?.uniqueId === y.uniqueId && <Check size={12} className="text-[#1A1A1A]" />}
-            </button>
-          ))}
-        </div>
-      )}
-    </div>
-  );
-}
-
-// ─── Company + FY Switcher ────────────────────────────────────────────────────
-function CompanySwitcher() {
-  const [open, setOpen] = useState(false);
-  const { companies, selectedCompany, selectCompany } = useAuth();
-  const ref = useRef(null);
-  useEffect(() => {
-    const h = e => { if (ref.current && !ref.current.contains(e.target)) setOpen(false); };
-    document.addEventListener('mousedown', h);
-    return () => document.removeEventListener('mousedown', h);
-  }, []);
-
-  const list = companies || [];
-  const current = selectedCompany || list[0];
-  const displayName = current?.name || 'Select Company';
-
-  return (
-    <div className="relative" ref={ref}>
-      <button
-        onClick={() => setOpen(p => !p)}
-        className="flex items-center gap-2 px-2.5 py-1.5 rounded-lg hover:bg-[#F5F4EF] transition-colors"
-      >
-        <div className="w-5 h-5 rounded-md bg-[#1A1A1A] flex items-center justify-center text-white text-[10px] font-bold flex-shrink-0">
-          {displayName[0]}
-        </div>
-        <span className="text-xs font-medium text-[#1A1A1A] max-w-[120px] truncate">
-          {displayName.split(' ').slice(0, 2).join(' ')}
-        </span>
-        <ChevronDown size={11} className={`text-[#AEACA8] transition-transform ${open ? 'rotate-180' : ''}`} />
-      </button>
-
-      {open && (
-        <div className="absolute top-full right-0 mt-1.5 w-64 bg-white border border-[#E9E8E3] rounded-xl shadow-lg z-50 py-1 overflow-hidden">
-          {/* Company list */}
-          <p className="px-3 pt-2 pb-1.5 text-[10px] font-semibold text-[#AEACA8] uppercase tracking-widest">Company</p>
-          {list.map(c => (
-            <button
-              key={c.guid || c.name}
-              onClick={() => { selectCompany(c); setOpen(false); }}
-              className="w-full flex items-center gap-2.5 px-3 py-2 hover:bg-[#F5F4EF] transition-colors text-left"
-            >
-              <div className="w-6 h-6 rounded-md bg-[#1A1A1A] flex items-center justify-center text-white text-[10px] font-bold flex-shrink-0">
-                {c.name?.[0]}
-              </div>
-              <span className="flex-1 text-sm text-[#1A1A1A] truncate font-medium">{c.name}</span>
-              {current?.guid === c.guid && <Check size={13} className="text-[#1A1A1A] flex-shrink-0" />}
-            </button>
-          ))}
-
-        </div>
-      )}
-    </div>
-  );
-}
-
-// ─── Nav ──────────────────────────────────────────────────────────────────────
-const navGroups = [
-  { label: null, items: [{ label: 'Dashboard', icon: LayoutDashboard, path: '/' }] },
+const NAV = [
+  { items: [{ label: 'Dashboard', icon: LayoutDashboard, to: '/', end: true }] },
   {
     label: 'Transactions',
     items: [
-      { label: 'Sales',               icon: TrendingUp,    path: '/sales' },
-      { label: 'Purchase',            icon: ShoppingCart,  path: '/purchase' },
-      { label: 'Inventory',           icon: Package,       path: '/inventory' },
-      { label: 'Expenses',            icon: Receipt,       path: '/expenses' },
-      { label: 'Payments & Receipts', icon: CreditCard,    path: '/payments' },
-      { label: 'Parties',             icon: Building2,     path: '/parties' },
+      { label: 'Sales', icon: TrendingUp, to: '/sales' },
+      { label: 'Purchase', icon: ShoppingCart, to: '/purchase' },
+      { label: 'Vouchers', icon: Wallet, to: '/vouchers' },
+      { label: 'Inventory', icon: Package, to: '/inventory' },
+      { label: 'Expenses', icon: Receipt, to: '/expenses' },
     ],
   },
   {
-    label: 'Financials',
+    label: 'Books',
     items: [
-      { label: 'Cash & Bank',            icon: Landmark,       path: '/financials/cash-bank' },
-      { label: 'Receivables & Payables', icon: ArrowLeftRight, path: '/financials/receivables-payables' },
-      { label: 'Loans & ODs',            icon: CreditCard,     path: '/financials/loans-ods' },
-      { label: 'Reports',                icon: FileBarChart2,  path: '/financials/reports' },
+      { label: 'Financials', icon: Landmark, to: '/financials' },
+      { label: 'Compliance', icon: ShieldCheck, to: '/compliance' },
+      { label: 'Ledgers', icon: BookOpen, to: '/ledgers' },
+      { label: 'Audit Trail', icon: ClipboardList, to: '/audit-trail' },
     ],
   },
   {
-    label: 'Compliance',
+    divider: true,
     items: [
-      { label: 'GST',         icon: ShieldCheck,   path: '/compliance/gst' },
-      { label: 'E-Way Bill',  icon: Truck,         path: '/compliance/eway-bill' },
-      { label: 'E-Invoice',   icon: FileText,      path: '/compliance/einvoice' },
-      { label: 'Other Taxes', icon: Receipt,       path: '/compliance/other-taxes' },
-      { label: 'Day Book', icon: ClipboardList, path: '/compliance/audit-trail' },
-    ],
-  },
-  {
-    label: null,
-    items: [
-      { label: 'Ledgers',       icon: BookOpen, path: '/ledgers' },
-      { label: 'AI Insights',   icon: Sparkles, path: '/ai-insights' },
-      { label: 'Notifications', icon: Bell,     path: '/notifications' },
-      { label: 'Settings',      icon: Settings, path: '/settings' },
+      { label: 'AI Insights', icon: Sparkles, to: '/ai-insights' },
+      { label: 'Settings', icon: SettingsIcon, to: '/settings' },
     ],
   },
 ];
 
-const createMenu = [
-  { label: 'Sales',      items: ['Create Invoice','Sales Order','Delivery Note','Credit Note'] },
-  { label: 'Purchase',   items: ['Purchase Invoice','Purchase Order','Debit Note'] },
-  { label: 'Voucher',    items: ['Payment Voucher','Receipt Voucher','Contra Voucher','Journal Voucher'] },
-  { label: 'Financials', items: ['Record Payment','Record Receipt','Record Expense'] },
+const CREATE_MENU = [
+  { label: 'Sales', items: [['Sales Invoice', 'sales-invoice'], ['Sales Order', 'sales-order'], ['Delivery Note', 'delivery-note'], ['Credit Note', 'credit-note'], ['Proforma', 'proforma'], ['Quotation', 'quotation']] },
+  { label: 'Purchase', items: [['Purchase Invoice', 'purchase-invoice'], ['Purchase Order', 'purchase-order'], ['Debit Note', 'debit-note']] },
+  { label: 'Voucher', items: [['Payment', 'payment'], ['Receipt', 'receipt'], ['Journal', 'journal'], ['Contra', 'contra'], ['Expense', 'expense']] },
+  { label: 'Masters', items: [['Party', 'party'], ['Ledger', 'ledger'], ['Stock Item', 'stock-item'], ['Warehouse', 'warehouse']] },
+  { label: 'Inventory', items: [['Stock Transfer', 'stock-transfer'], ['Stock Adjustment', 'stock-adjustment']] },
 ];
 
-// ─── Shell ────────────────────────────────────────────────────────────────────
-export default function AppShell() {
-  const [collapsed, setCollapsed] = useState({});
-  const [sidebarOpen, setSidebarOpen] = useState(true);
-  const [showCreate, setShowCreate] = useState(false);
-  const [hoveredGroup, setHoveredGroup] = useState('Sales');
-  const [activeForm, setActiveForm] = useState(null);
-  const createRef = useRef(null);
-  const location = useLocation();
+const SEARCH_TARGETS = NAV.flatMap(g => g.items).concat([
+  { label: 'Stock Items', to: '/inventory/items' }, { label: 'Warehouses', to: '/inventory/warehouses' },
+  { label: 'Stock Ledger', to: '/inventory/stock-ledger' }, { label: 'Reorder Queue', to: '/inventory/reorder-queue' },
+  { label: 'Negative Stock', to: '/inventory/negative-stock' }, { label: 'Barcodes', to: '/inventory/barcodes' },
+  { label: 'Aged Items', to: '/inventory/aged-items' }, { label: 'Expiry Schedule', to: '/inventory/expiry-schedule' },
+  { label: 'Payment Vouchers', to: '/vouchers/payment' }, { label: 'Receipt Vouchers', to: '/vouchers/receipt' },
+  { label: 'Journal Vouchers', to: '/vouchers/journal' }, { label: 'Contra Vouchers', to: '/vouchers/contra' },
+  { label: 'Profit & Loss', to: '/financials/profit-loss' }, { label: 'Balance Sheet', to: '/financials/balance-sheet' },
+  { label: 'Trial Balance', to: '/financials/trial-balance' },
+  { label: 'Cash Register', to: '/financials/cash-register' }, { label: 'Receivables', to: '/kpi/receivables' },
+  { label: 'Payables', to: '/kpi/payables' }, { label: 'Bank Balance', to: '/kpi/bank-balance' },
+  { label: 'Loans & ODs', to: '/kpi/loans-ods' }, { label: 'Stock Value', to: '/inventory' },
+  { label: 'Tally Sync', to: '/settings/tally-sync' }, { label: 'Audit Trail', to: '/audit-trail' },
+  { label: 'Day Book', to: '/audit-trail/daybook' },
+]);
+
+function Dropdown({ trigger, children, width = 230, testid, className = '', up = false, triggerClassName }) {
+  const [open, setOpen] = useState(false);
+  const ref = useClickOutside(() => setOpen(false));
+  return (
+    <div className="relative" ref={ref}>
+      <button
+        data-testid={testid}
+        onClick={() => setOpen(o => !o)}
+        className={triggerClassName || `flex h-11 items-center gap-2.5 rounded-lg border border-line bg-surface px-4 transition-colors hover:border-line-strong hover:bg-cream outline-none focus-visible:ring-2 focus-visible:ring-ink focus-visible:ring-offset-1 ${className}`}
+      >
+        {trigger}
+      </button>
+      {open && (
+        <div
+          className={`pop absolute z-[80] overflow-hidden rounded-xl border border-line bg-surface shadow-lg ${up ? 'bottom-full left-0 mb-2' : 'right-0 top-full mt-2'}`}
+          style={{ width }}
+          onClick={() => setOpen(false)}
+        >
+          {children}
+        </div>
+      )}
+    </div>
+  );
+}
+
+// Where a data search hit navigates in the portal (mobile routes → portal routes).
+function dataResultTarget(r) {
+  if (r.kind === 'voucher') return `/audit-trail/daybook?voucher=${encodeURIComponent(r.guid)}`;
+  if (r.kind === 'ledger') return `/ledgers?ledger=${encodeURIComponent(r.guid)}`;
+  if (r.kind === 'stock') return r.guid ? `/inventory/items/${encodeURIComponent(r.guid)}` : '/inventory/items';
+  return '/';
+}
+
+function CommandPalette() {
+  const lt = useLabelT();
+  const [open, setOpen] = useState(false);
+  const [q, setQ] = useState('');
+  const [i, setI] = useState(0);
+  const [dataHits, setDataHits] = useState([]);
   const navigate = useNavigate();
-  const { user, logout } = useAuth();
+  const inputRef = useRef(null);
+  const { selectedCompany } = useAuth();
+
+  // Mobile-parity data search: vouchers + ledgers + stock items via /api/dashboard/search.
+  useEffect(() => {
+    const n = q.trim();
+    if (!open || n.length < 2 || !selectedCompany?.guid) { setDataHits([]); return; }
+    let alive = true;
+    const t = setTimeout(async () => {
+      try {
+        const res = await api.searchGlobal(selectedCompany.guid, n);
+        if (alive) setDataHits(Array.isArray(res?.data) ? res.data : []);
+      } catch { if (alive) setDataHits([]); }
+    }, 300);
+    return () => { alive = false; clearTimeout(t); };
+  }, [q, open, selectedCompany?.guid]);
+
+  const results = useMemo(() => {
+    const n = q.trim().toLowerCase();
+    const screens = (n ? SEARCH_TARGETS.filter(t => t.label.toLowerCase().includes(n)) : SEARCH_TARGETS)
+      .slice(0, n ? 4 : 8).map(t => ({ ...t, kind: 'screen' }));
+    const data = dataHits.slice(0, 8).map(d => ({
+      label: d.label,
+      sub: [d.party, d.subtitle].filter(Boolean).join(' · '),
+      kind: d.kind,
+      to: dataResultTarget(d),
+    }));
+    return [...data, ...screens].slice(0, 10);
+  }, [q, dataHits]);
 
   useEffect(() => {
-    const h = e => { if (createRef.current && !createRef.current.contains(e.target)) setShowCreate(false); };
+    const h = e => {
+      if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 'k') { e.preventDefault(); inputRef.current?.focus(); setOpen(true); }
+      if (e.key === 'Escape') setOpen(false);
+    };
+    document.addEventListener('keydown', h);
+    return () => document.removeEventListener('keydown', h);
+  }, []);
+
+  const go = t => { navigate(t.to); setOpen(false); setQ(''); inputRef.current?.blur(); };
+
+  const wrapRef = useRef(null);
+  useEffect(() => {
+    const h = e => { if (wrapRef.current && !wrapRef.current.contains(e.target)) setOpen(false); };
     document.addEventListener('mousedown', h);
     return () => document.removeEventListener('mousedown', h);
   }, []);
 
-  const getBreadcrumb = () => {
-    const path = location.pathname;
-    if (path === '/') return 'Dashboard';
-    return path.split('/').filter(Boolean)
-      .map(p => p.replace(/-/g, ' ').replace(/\b\w/g, c => c.toUpperCase()))
-      .join(' / ');
-  };
+  return (
+    <div ref={wrapRef} data-testid="global-search-trigger" className="relative hidden w-full max-w-[560px] md:block">
+      <div
+        onClick={() => { inputRef.current?.focus(); setOpen(true); }}
+        className={`flex h-11 cursor-text items-center gap-3 rounded-lg border bg-surface px-4 transition-[border-color,box-shadow] duration-200 ease-out ${open ? 'border-[rgba(26,26,26,0.35)] shadow-[0_0_0_2px_rgba(26,26,26,0.07)]' : 'border-line hover:border-line-strong'}`}
+      >
+        <Search size={16} strokeWidth={2} className="flex-shrink-0 text-ink-faint" />
+        <input
+          ref={inputRef}
+          data-testid="global-search-input"
+          aria-label={lt('Search transactions, parties...')}
+          value={q}
+          onFocus={() => setOpen(true)}
+          onChange={e => { setQ(e.target.value); setI(0); setOpen(true); }}
+          onKeyDown={e => {
+            if (e.key === 'ArrowDown') { e.preventDefault(); setI(x => Math.min(results.length - 1, x + 1)); }
+            if (e.key === 'ArrowUp') { e.preventDefault(); setI(x => Math.max(0, x - 1)); }
+            if (e.key === 'Enter' && results[i]) go(results[i]);
+            if (e.key === 'Escape') { setOpen(false); inputRef.current?.blur(); }
+          }}
+          placeholder={lt('Search transactions, parties...')}
+          style={{ outline: 'none' }}
+          className="min-w-0 flex-1 bg-transparent text-sm font-semibold text-ink outline-none placeholder:font-medium placeholder:text-ink-faint"
+        />
+        <span className="ml-auto flex-shrink-0 rounded-md bg-paper-2 px-2 py-0.5 text-xs font-bold text-ink-soft">⌘K</span>
+      </div>
+
+      {open && (
+        <div data-testid="global-search-results" className="pop absolute left-0 right-0 top-full z-[120] mt-2 max-h-[52vh] overflow-y-auto rounded-xl border border-line bg-surface p-2 shadow-lg">
+          {results.length === 0 && <p className="py-8 text-center text-sm text-ink-faint">{lt('No matches')}</p>}
+          {results.map((r, k) => (
+            <button
+              key={r.to + r.label}
+              data-testid={`search-result-${r.kind || 'screen'}-${k}`}
+              onMouseEnter={() => setI(k)}
+              onClick={() => go(r)}
+              className={`flex w-full items-center gap-4 rounded-lg px-4 py-3 text-left transition-colors ${k === i ? 'bg-cream ring-1 ring-line' : 'hover:bg-cream/60'}`}
+            >
+              {r.kind && r.kind !== 'screen' && (
+                 <span className="rounded-md bg-paper-2 px-1.5 py-0.5 text-xs font-bold uppercase tracking-wider text-ink-soft">
+                  {r.kind === 'voucher' ? lt('Voucher') : r.kind === 'ledger' ? lt('Party') : lt('Stock')}
+                </span>
+              )}
+              <span className="truncate text-sm font-bold text-ink">{r.kind === 'screen' ? lt(r.label) : r.label}</span>
+              <span className={`ml-auto flex-shrink-0 text-xs ${k === i ? 'font-medium text-ink-soft' : 'text-ink-faint'}`}>{r.sub || r.to}</span>
+              {k === i && <CornerDownLeft size={14} strokeWidth={2} className="flex-shrink-0 text-ink-soft" />}
+            </button>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
+export default function AppShell() {
+  const { t } = useTranslation();
+  const lt = useLabelT();
+  const navLabel = l => (NAV_I18N[l] ? t(NAV_I18N[l], { defaultValue: l }) : lt(l));
+  const [collapsed, setCollapsed] = useState({});
+  const [mini, setMini] = useState(false);
+  const [mobileNav, setMobileNav] = useState(false);
+  const [createReq, setCreateReq] = useState(null);
+  const openCreate = useCallback((kind, prefill) => setCreateReq({ kind, prefill }), []);
+  const [hoverGroup, setHoverGroup] = useState('Sales');
+  const [showCreate, setShowCreate] = useState(false);
+  const createRef = useClickOutside(() => setShowCreate(false));
+  const location = useLocation();
+  const navigate = useNavigate();
+  const { user, logout, companies, selectedCompany, selectCompany, selectedFY, selectFY, isPaired, isDesktopOnline, unpairFromTally, showToast } = useAuth();
+  const [unpairing, setUnpairing] = useState(false);
+
+  useEffect(() => { setMobileNav(false); }, [location.pathname]);
+
+  const crumbs = useMemo(() => {
+    if (location.pathname === '/') return ['Dashboard'];
+    return location.pathname.split('/').filter(Boolean).map(p => p.replace(/-/g, ' ').replace(/\b\w/g, c => c.toUpperCase()));
+  }, [location.pathname]);
+
+  const { unread, refresh: refreshNotifs } = useNotifications(selectedCompany?.guid);
+  const [notifOpen, setNotifOpen] = useState(false);
+
+  useEffect(() => {
+    if (selectedCompany?.guid) refreshNotifs();
+  }, [selectedCompany?.guid, refreshNotifs]);
+  const company = selectedCompany || companies[0];
+  const years = company?.years || [];
+  const fy = selectedFY || years[0];
+  const name = user?.name || 'Account';
+  const initials = name.split(' ').map(w => w[0]).join('').slice(0, 2);
 
   return (
-    <div className="flex h-screen overflow-hidden" style={{ background: '#F5F4EF' }}>
+    <div className="flex h-screen gap-0 overflow-hidden bg-paper p-0 lg:gap-4 lg:p-4">
+      {mobileNav && <div className="fade fixed inset-0 z-40 bg-ink/30 backdrop-blur-sm lg:hidden" onClick={() => setMobileNav(false)} />}
 
-      {/* ── Sidebar ──────────────────────────────────────────────────────── */}
-      <aside className={`${sidebarOpen ? 'w-56' : 'w-14'} bg-white border-r border-[#E9E8E3] flex flex-col transition-all duration-200 flex-shrink-0`}>
-
-        {/* Logo */}
-        <div className="flex items-center gap-2.5 px-4 py-3.5 border-b border-[#F5F4EF]">
-          <div className="w-7 h-7 rounded-lg bg-[#1A1A1A] flex items-center justify-center text-white text-xs font-bold flex-shrink-0">T</div>
-          {sidebarOpen && <span className="text-sm font-semibold text-[#1A1A1A] tracking-tight">TallyDekho</span>}
+      {/* Sidebar — floating rounded panel */}
+      <aside
+        data-testid="sidebar"
+        className={`fixed inset-y-0 left-0 z-50 flex ${mini ? 'lg:w-[84px]' : 'lg:w-[258px]'} w-[266px] flex-shrink-0 flex-col rounded-none border-r border-line bg-paper-2 transition-[transform,width] duration-300 lg:static lg:rounded-2xl lg:border lg:bg-surface/50 ${
+          mobileNav ? 'translate-x-0' : '-translate-x-full'
+        } lg:translate-x-0`}
+      >
+        <div className="flex h-16 items-center justify-between px-5">
+          {!mini ? (
+            <div className="flex min-w-0 items-center gap-3">
+              <span className="flex h-8 w-8 flex-shrink-0 items-center justify-center rounded-lg bg-ink text-sm font-bold text-white">T</span>
+              <div className="min-w-0">
+                <p className="display text-base font-bold leading-none text-ink tracking-tight">TallyDekho</p>
+              </div>
+            </div>
+          ) : (
+            <span className="flex h-8 w-8 items-center justify-center rounded-lg bg-ink text-sm font-bold text-white mx-auto">T</span>
+          )}
+          <button className="text-ink-soft hover:text-ink lg:hidden" onClick={() => setMobileNav(false)}><X size={20} strokeWidth={2} /></button>
         </div>
 
-        {/* Search */}
-        {sidebarOpen && (
-          <div className="px-3 pt-3 pb-2">
-            <div className="flex items-center gap-2 px-2.5 py-2 rounded-lg bg-[#F5F4EF] border border-[#E9E8E3] text-[#AEACA8] text-xs cursor-pointer hover:border-[#D4D3CE] transition-colors">
-              <Search size={12} />
-              <span>Search...</span>
-              <span className="ml-auto text-[10px] bg-white px-1.5 py-0.5 rounded border border-[#E9E8E3] font-medium">⌘K</span>
-            </div>
-          </div>
-        )}
-
-        {/* Nav */}
-        <nav className="flex-1 overflow-y-auto py-2 px-2 space-y-0.5">
-          {navGroups.map((group, gi) => (
-            <div key={gi} className="mb-1">
-              {group.label && sidebarOpen && (
+        <nav className="min-h-0 flex-1 overflow-y-auto px-4 pb-4">
+          {NAV.map((group, gi) => (
+            <div key={gi} className="mb-2">
+              {group.divider && <div className="mx-2 my-4 border-t border-line" />}
+              {group.label && !mini && (
                 <button
-                  onClick={() => setCollapsed(p => ({ ...p, [group.label]: !p[group.label] }))}
-                  className="flex items-center justify-between w-full px-2 py-1 text-[10px] font-semibold text-[#AEACA8] uppercase tracking-widest hover:text-[#787774] mt-2 transition-colors"
+                  onClick={() => setCollapsed(c => ({ ...c, [group.label]: !c[group.label] }))}
+                  className="flex w-full items-center justify-between px-2 py-2 text-xs font-bold uppercase tracking-wider text-ink-soft transition-colors hover:text-ink outline-none focus-visible:ring-2 focus-visible:ring-ink focus-visible:ring-offset-1 rounded-md"
                 >
-                  {group.label}
-                  {collapsed[group.label] ? <ChevronRight size={10} /> : <ChevronDown size={10} />}
+                  {navLabel(group.label)}
+                  {collapsed[group.label] ? <ChevronRight size={14} strokeWidth={2} /> : <ChevronDown size={14} strokeWidth={2} />}
                 </button>
               )}
-              {!collapsed[group.label] && group.items.map(item => (
-                <NavLink
-                  key={item.path}
-                  to={item.path}
-                  end={item.path === '/'}
-                  className={({ isActive }) =>
-                    `flex items-center gap-2.5 px-2 py-1.5 rounded-lg text-sm transition-colors ${
-                      isActive
-                        ? 'bg-[#1A1A1A] text-white font-medium'
-                        : 'text-[#787774] hover:text-[#1A1A1A] hover:bg-[#F5F4EF]'
-                    }`
-                  }
-                  title={!sidebarOpen ? item.label : undefined}
-                >
-                  <item.icon size={14} className="flex-shrink-0" />
-                  {sidebarOpen && <span className="truncate">{item.label}</span>}
-                </NavLink>
-              ))}
+              {!collapsed[group.label] && group.items.map(item => {
+                const badge = item.badge || null;
+                return (
+                  <NavLink
+                    key={item.to}
+                    to={item.to}
+                    end={item.end}
+                    title={navLabel(item.label)}
+                    data-testid={`nav-${item.label.toLowerCase().replace(/[^a-z0-9]+/g, '-')}`}
+                    className={({ isActive }) =>
+                      `group relative mb-1 flex items-center gap-3 rounded-xl py-2.5 outline-none focus-visible:ring-2 focus-visible:ring-ink focus-visible:ring-offset-1 text-sm font-semibold transition-[background-color,color] duration-150 ${
+                        isActive
+                          ? 'bg-surface text-ink shadow-sm ring-1 ring-line'
+                          : 'text-ink-soft hover:bg-surface/50 hover:text-ink'
+                      } ${mini ? 'justify-center px-0' : 'px-3'}`
+                    }
+                  >
+                    {({ isActive }) => (
+                      <>
+                        <item.icon size={18} strokeWidth={isActive ? 2.5 : 2} className="flex-shrink-0" />
+                        {!mini && <span className="truncate">{navLabel(item.label)}</span>}
+                        {!mini && badge && (
+                          <span className="ml-auto flex h-5 min-w-[20px] items-center justify-center rounded-md bg-ink px-1.5 text-xs font-bold text-white">
+                            {badge}
+                          </span>
+                        )}
+                        {mini && badge && <span className="absolute right-3 top-2.5 h-2 w-2 rounded-[3px] bg-neg" />}
+                      </>
+                    )}
+                  </NavLink>
+                );
+              })}
             </div>
           ))}
         </nav>
 
-        {/* Footer */}
-        {sidebarOpen && (
-          <div className="px-3 py-3 border-t border-[#F5F4EF]">
-            <div className="flex items-center gap-2 px-2 py-1.5 rounded-lg hover:bg-[#F5F4EF] cursor-pointer transition-colors">
-              <Building2 size={12} className="text-[#AEACA8] flex-shrink-0" />
-              <span className="text-xs text-[#787774] truncate">Company</span>
+        {/* Profile + Tally status + collapse control */}
+        <div className="flex-shrink-0 px-4 pb-5">
+          <Dropdown
+            up
+            testid="user-menu-button"
+            width={240}
+            triggerClassName={`flex w-full items-center gap-3 rounded-xl border border-line bg-surface px-3 py-2.5 text-left transition-colors hover:bg-cream outline-none focus-visible:ring-2 focus-visible:ring-ink ${mini ? 'justify-center px-0' : ''}`}
+            trigger={<>
+              <span className="relative flex h-9 w-9 flex-shrink-0 items-center justify-center rounded-lg bg-paper-2 text-xs font-bold text-ink">
+                {initials}
+                <span className={`absolute -bottom-0.5 -right-0.5 h-2.5 w-2.5 rounded-full ring-2 ring-surface ${isPaired && isDesktopOnline ? 'bg-pos' : isPaired ? 'bg-warn' : 'bg-warn'}`} />
+              </span>
+              {!mini && (
+                <>
+                  <span className="min-w-0 flex-1 leading-tight">
+                    <span className="block truncate text-sm font-bold text-ink">{name}</span>
+                    <span className={`block truncate text-xs font-semibold ${isPaired && isDesktopOnline ? 'text-pos' : isPaired ? 'text-warn' : 'text-warn'}`}>
+                      {isPaired ? (isDesktopOnline ? lt('Tally connected') : lt('Tally paired · offline')) : lt('Connect Tally')}
+                    </span>
+                  </span>
+                  <ChevronDown size={14} strokeWidth={2} className="rotate-180 text-ink-faint" />
+                </>
+              )}
+            </>}
+          >
+            <div className="px-5 py-4">
+              <p className="display text-base font-bold text-ink">{name}</p>
+              <p className="mt-0.5 truncate text-xs text-ink-soft">{user?.email || user?.mobile}</p>
             </div>
-          </div>
-        )}
+            <div className="border-t border-line p-2">
+              <button
+                data-testid="sidebar-sync-cta"
+                onClick={() => navigate('/settings/tally-sync')}
+                className="flex w-full items-center gap-3 rounded-lg px-3 py-2.5 text-left text-sm font-semibold text-ink-soft transition-colors hover:bg-cream hover:text-ink"
+              >
+                <Zap size={16} strokeWidth={2} className={isPaired && isDesktopOnline ? 'text-pos' : 'text-warn'} />
+                <span className="flex-1">{isPaired ? (isDesktopOnline ? lt('Tally connected') : lt('Tally paired · offline')) : lt('Connect Tally')}</span>
+                <span className="text-xs font-bold text-ink-faint">{lt('Sync settings')}</span>
+              </button>
+              <button
+                data-testid="sidebar-unpair"
+                disabled={unpairing}
+                onClick={async () => {
+                  setUnpairing(true);
+                  try { await unpairFromTally(); }
+                  catch (err) { showToast(err?.message || 'Unpair failed', 'warning'); }
+                  finally { setUnpairing(false); }
+                }}
+                className="flex w-full items-center gap-3 rounded-lg px-3 py-2.5 text-left text-sm font-semibold text-alert transition-colors hover:bg-neg-bg disabled:opacity-40"
+              >
+                <Unplug size={16} strokeWidth={2} />
+                {unpairing ? lt('Unpairing…') : lt('Unpair Tally')}
+              </button>
+              <button onClick={() => navigate('/settings/profile')} className="flex w-full items-center gap-3 rounded-lg px-3 py-2.5 text-left text-sm font-semibold text-ink-soft transition-colors hover:bg-cream hover:text-ink">
+                <User size={16} strokeWidth={2} /> {t('nav.profile', 'Profile')}
+              </button>
+              <button onClick={() => navigate('/settings')} className="flex w-full items-center gap-3 rounded-lg px-3 py-2.5 text-left text-sm font-semibold text-ink-soft transition-colors hover:bg-cream hover:text-ink">
+                <SettingsIcon size={16} strokeWidth={2} /> {t('nav.settings', 'Settings')}
+              </button>
+              <button
+                data-testid="logout-button"
+                onClick={async () => { await logout(); navigate('/login', { replace: true }); }}
+                className="flex w-full items-center gap-3 rounded-lg px-3 py-2.5 text-left text-sm font-bold text-alert transition-colors hover:bg-neg-bg"
+              >
+                <LogOut size={16} strokeWidth={2} /> {lt('Sign out')}
+              </button>
+            </div>
+          </Dropdown>
+
+          <button
+            onClick={() => setMini(m => !m)}
+            data-testid="sidebar-collapse-toggle"
+            className="mt-3 hidden w-full items-center justify-center gap-2 rounded-lg px-3 py-2 text-sm font-semibold text-ink-soft transition-colors hover:bg-surface/50 hover:text-ink outline-none focus-visible:ring-2 focus-visible:ring-ink lg:flex"
+          >
+            {mini ? <PanelLeft size={18} strokeWidth={2} /> : <><PanelLeftClose size={18} strokeWidth={2} /> {lt('Collapse sidebar')}</>}
+          </button>
+        </div>
       </aside>
 
-      {/* ── Main ─────────────────────────────────────────────────────────── */}
-      <div className="flex-1 flex flex-col overflow-hidden">
-
-        {/* Topbar */}
-        <header className="h-12 bg-white border-b border-[#E9E8E3] flex items-center px-5 gap-3 flex-shrink-0">
-          <button
-            onClick={() => setSidebarOpen(p => !p)}
-            className="text-[#AEACA8] hover:text-[#1A1A1A] transition-colors p-1 rounded-lg hover:bg-[#F5F4EF]"
-          >
-            <Menu size={16} />
+      <div className="flex min-w-0 flex-1 flex-col gap-4 overflow-hidden">
+        {/* Top bar — floating rounded */}
+        <header className="flex h-16 flex-shrink-0 items-center gap-4 border-b border-line bg-surface px-4 sm:px-6 lg:rounded-2xl lg:border">
+          <button data-testid="mobile-nav-toggle" onClick={() => setMobileNav(v => !v)} className="rounded-lg p-2 text-ink hover:bg-cream outline-none focus-visible:ring-2 focus-visible:ring-ink lg:hidden">
+            <Menu size={20} strokeWidth={2} />
           </button>
 
-          <span className="text-sm font-semibold text-[#1A1A1A] hidden md:block">{getBreadcrumb()}</span>
-          <div className="flex-1" />
+          <div className="hidden min-w-0 flex-1 md:block"><CommandPalette /></div>
 
-          <GlobalSearch />
-
-          {/* FY Selector — global, always visible */}
-          <FYSelector />
-
-          {/* Create+ */}
-          <div className="relative" ref={createRef}>
-            <button
-              onClick={() => setShowCreate(p => !p)}
-              className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-semibold bg-[#1A1A1A] text-white hover:bg-[#333] transition-colors"
-            >
-              <Plus size={13} /> Create
-              <ChevronDown size={11} className={`transition-transform ${showCreate ? 'rotate-180' : ''}`} />
-            </button>
-
-            {showCreate && (
-              <div className="absolute top-full right-0 mt-2 z-50 flex bg-white rounded-xl border border-[#E9E8E3] shadow-lg overflow-hidden" style={{ minWidth: 360 }}>
-                <div className="w-36 border-r border-[#F5F4EF] py-1 bg-[#F5F4EF]">
-                  {createMenu.map(g => (
-                    <button
-                      key={g.label}
-                      onMouseEnter={() => setHoveredGroup(g.label)}
-                      className={`w-full flex items-center justify-between px-4 py-2.5 text-sm transition-colors ${
-                        hoveredGroup === g.label
-                          ? 'bg-white text-[#1A1A1A] font-semibold border-r-2 border-[#1A1A1A]'
-                          : 'text-[#787774] hover:text-[#1A1A1A]'
-                      }`}
-                    >
-                      {g.label}<ChevronRight size={12} />
-                    </button>
-                  ))}
-                </div>
-                <div className="w-52 py-1">
-                  <p className="px-4 py-2 text-[10px] font-semibold text-[#AEACA8] uppercase tracking-widest">{hoveredGroup}</p>
-                  {createMenu.find(g => g.label === hoveredGroup)?.items.map(item => (
-                    <button
-                      key={item}
-                      onClick={() => { setActiveForm(item); setShowCreate(false); }}
-                      className="w-full text-left px-4 py-2 text-sm text-[#1A1A1A] hover:bg-[#F5F4EF] transition-colors"
-                    >
-                      {item}
-                    </button>
-                  ))}
-                </div>
-              </div>
-            )}
+          <div className="flex min-w-0 flex-1 items-center gap-1.5 md:hidden">
+            {crumbs.slice(-2).map((c, i, a) => (
+              <span key={i} className="flex min-w-0 items-center gap-1.5">
+                {i > 0 && <ChevronRight size={14} className="text-ink-faint" />}
+                <span className={`truncate text-sm ${i === a.length - 1 ? 'font-bold text-ink' : 'font-medium text-ink-soft'}`}>{lt(c)}</span>
+              </span>
+            ))}
           </div>
 
-          <SyncStatus />
-          <div className="h-5 w-px bg-[#E9E8E3]" />
-          <CompanySwitcher />
+          <div className="ml-auto flex items-center gap-3">
+            <OfflineBadge />
+            <Dropdown
+              testid="company-switcher-button"
+              width={270}
+              trigger={<>
+                <span className="flex h-7 w-7 items-center justify-center rounded-md bg-ink text-xs font-bold text-white">{(company?.name || 'A')[0]}</span>
+                <span className="hidden max-w-[130px] truncate text-sm font-bold text-ink lg:block">{company?.name}</span>
+                <ChevronDown size={14} strokeWidth={2} className="hidden text-ink-faint lg:block" />
+              </>}
+            >
+              <p className="px-5 pt-4 pb-2 text-xs font-bold uppercase tracking-wider text-ink-soft">{lt('Company')}</p>
+              {(companies || []).map(c => (
+                <button key={c.guid} onClick={() => selectCompany(c)} data-testid={`company-option-${c.guid}`}
+                  className="flex w-full items-center gap-3 px-5 py-3 text-left transition-colors hover:bg-cream">
+                  <span className="flex h-8 w-8 flex-shrink-0 items-center justify-center rounded-md bg-paper-2 text-xs font-bold text-ink">{c.name[0]}</span>
+                  <span className="flex-1 truncate text-sm font-semibold text-ink">{c.name}</span>
+                  {company?.guid === c.guid && <Check size={16} strokeWidth={2.5} className="text-ink" />}
+                </button>
+              ))}
+            </Dropdown>
 
-          <button
-            onClick={() => navigate('/notifications')}
-            className="relative text-[#AEACA8] hover:text-[#1A1A1A] transition-colors p-1 rounded-lg hover:bg-[#F5F4EF]"
-          >
-            <Bell size={16} />
-            {(() => {
-              try {
-                const stored = localStorage.getItem('notifications');
-                const items = stored ? JSON.parse(stored) : null;
-                const count = Array.isArray(items) ? items.filter(n => !n.read).length : 0;
-                return count > 0 ? (
-                  <span className="absolute -top-0.5 -right-0.5 w-3.5 h-3.5 rounded-full bg-[#C0392B] text-white text-[9px] flex items-center justify-center font-bold">
-                    {count > 9 ? '9+' : count}
-                  </span>
-                ) : null;
-              } catch { return null; }
-            })()}
-          </button>
+            <Dropdown
+              testid="fy-selector-button"
+              width={190}
+              trigger={<>
+                <span className="text-xs font-bold text-ink-soft">FY</span>
+                <span className="text-sm font-bold text-ink">{fy?.name || '2025-26'}</span>
+                <ChevronDown size={14} strokeWidth={2} className="text-ink-faint" />
+              </>}
+            >
+              <p className="px-5 pt-4 pb-2 text-xs font-bold uppercase tracking-wider text-ink-soft">{lt('Financial year')}</p>
+              {[...years].reverse().map(y => (
+                <button key={y.uniqueId} onClick={() => selectFY(y)} data-testid={`fy-option-${y.name}`}
+                  className="flex w-full items-center justify-between px-5 py-3 text-left transition-colors hover:bg-cream">
+                  <span className="text-sm font-bold text-ink">FY {y.name}</span>
+                  {fy?.uniqueId === y.uniqueId && <Check size={16} strokeWidth={2.5} className="text-ink" />}
+                </button>
+              ))}
+            </Dropdown>
 
-          <UserMenu user={user} onLogout={() => { logout(); navigate('/auth/login'); }} />
+            <button
+              data-testid="notifications-button"
+              onClick={() => setNotifOpen(true)}
+              className="relative flex h-11 w-11 items-center justify-center rounded-lg border border-line bg-surface text-ink-soft transition-colors hover:border-line-strong hover:bg-cream hover:text-ink outline-none focus-visible:ring-2 focus-visible:ring-ink focus-visible:ring-offset-1"
+            >
+              <Bell size={18} strokeWidth={2} />
+              {unread > 0 && (
+                <span className="absolute -right-1.5 -top-1.5 flex h-5 min-w-[20px] items-center justify-center rounded-full bg-alert px-1.5 text-xs font-bold text-white ring-2 ring-surface">
+                  {unread}
+                </span>
+              )}
+            </button>
+
+            <div className="relative" ref={createRef}>
+              <button
+                data-testid="create-button"
+                onClick={() => setShowCreate(s => !s)}
+                className="flex h-11 items-center gap-2 rounded-lg bg-ink px-4 text-white transition-colors hover:bg-[#2E2E2B] outline-none focus-visible:ring-2 focus-visible:ring-ink focus-visible:ring-offset-2 focus-visible:ring-offset-surface"
+              >
+                <Plus size={18} strokeWidth={2.5} />
+                <span className="hidden text-sm font-bold sm:inline">{t('common.create', 'Create')}</span>
+              </button>
+              {showCreate && (
+                <div className="pop absolute right-0 top-full z-[80] mt-2 flex max-w-[calc(100vw-2rem)] flex-col overflow-hidden rounded-xl border border-line bg-surface shadow-lg sm:flex-row" style={{ minWidth: 260 }}>
+                  <div className="flex gap-1 overflow-x-auto bg-paper-2 p-2 sm:w-[140px] sm:flex-col sm:overflow-visible">
+                    {CREATE_MENU.map(g => (
+                      <button
+                        key={g.label}
+                        onMouseEnter={() => setHoverGroup(g.label)}
+                        onClick={() => setHoverGroup(g.label)}
+                        className={`flex flex-shrink-0 items-center justify-between gap-2 rounded-lg px-3 py-2 text-sm font-semibold transition-colors sm:w-full ${
+                          hoverGroup === g.label ? 'bg-surface text-ink shadow-sm ring-1 ring-line' : 'text-ink-soft hover:text-ink hover:bg-surface/50'
+                        }`}
+                      >
+                        {lt(g.label)}<ChevronRight size={14} strokeWidth={2} className="hidden sm:block opacity-50" />
+                      </button>
+                    ))}
+                  </div>
+                  <div className="flex-1 p-2 sm:min-w-[220px]">
+                    {CREATE_MENU.find(g => g.label === hoverGroup)?.items.map(([label, kind]) => (
+                      <button
+                        key={kind}
+                        data-testid={`create-${kind}`}
+                        onClick={() => { openCreate(kind); setShowCreate(false); }}
+                        className="w-full rounded-lg px-4 py-2.5 text-left text-sm font-semibold text-ink transition-colors hover:bg-cream"
+                      >
+                        {lt(label)}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+              )}
+            </div>
+          </div>
         </header>
 
-        {/* Content */}
-        <main className="flex-1 overflow-y-auto" style={{ background: '#F5F4EF' }}>
-          <div className="px-8 py-6 w-full max-w-screen-2xl mx-auto">
-            <Outlet />
+        <main className="flex-1 overflow-y-auto pb-8">
+          <div className="w-full px-4 sm:px-6 lg:px-2">
+            <CreateContext.Provider value={openCreate}>
+              <Outlet />
+            </CreateContext.Provider>
           </div>
         </main>
       </div>
 
-      <CreateModal formKey={activeForm} onClose={() => setActiveForm(null)} />
+      <CreateDrawer kind={createReq?.kind} prefill={createReq?.prefill} open={!!createReq} onClose={() => setCreateReq(null)} />
+      <NotificationDrawer open={notifOpen} onClose={() => setNotifOpen(false)} />
     </div>
   );
 }

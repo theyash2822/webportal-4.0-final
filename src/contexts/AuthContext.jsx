@@ -1,17 +1,34 @@
-import { createContext, useContext, useState, useEffect, useCallback } from 'react';
-import api, { fetchMe } from '../services/api';
+import { createContext, useContext, useState, useEffect, useCallback, useRef } from 'react';
+import api, {
+  fetchMe,
+  fetchMeWithToken,
+  fetchCompaniesHydrated,
+  fetchCompanyYears,
+  normalizeCompanyYears,
+  fetchTallySyncStatus,
+  resolveActiveCompanyGuid,
+} from '../services/api';
 import wsService from '../services/websocket';
+import { invalidateStockCache } from '../utils/stockCache';
+import { tryAutoRegisterPush } from '../services/push';
 
 const AuthContext = createContext(null);
 
-// Clear any stale/fake tokens from previous sessions on page load
-// This prevents blank screens caused by expired or fake demo tokens
 (function cleanStaleToken() {
   const t = localStorage.getItem('authToken');
   if (t && t.startsWith('demo-token-')) {
     localStorage.clear();
   }
 })();
+
+/** Default FY — match mobile Header (company/years ORDER BY begin_date DESC → index 0). */
+function pickDefaultFY(company) {
+  if (!company?.years?.length) return null;
+  const today = new Date().toISOString().slice(0, 10);
+  const inRange = company.years.find(y => y.startDate <= today && y.endDate >= today);
+  if (inRange) return inRange;
+  return company.years[0];
+}
 
 export function AuthProvider({ children }) {
   const [token,     setToken]     = useState(() => localStorage.getItem('authToken'));
@@ -20,84 +37,148 @@ export function AuthProvider({ children }) {
   const [selectedCompany, setSelectedCompany] = useState(() => { try { return JSON.parse(localStorage.getItem('selectedCompany')); } catch { return null; } });
   const [selectedFY, setSelectedFY] = useState(() => { try { return JSON.parse(localStorage.getItem('selectedFY')); } catch { return null; } });
   const [isPaired,  setIsPaired]  = useState(() => localStorage.getItem('isPaired') === 'true');
+  const [isDesktopOnline, setIsDesktopOnline] = useState(false);
+  const [authBootstrapping, setAuthBootstrapping] = useState(false);
   const [syncToast, setSyncToast] = useState(null);
-  // Incremented on every successful sync — any page that depends on fresh data should use this as a useEffect dep
   const [syncVersion, setSyncVersion] = useState(0);
 
-  // ── Connect WebSocket when token is available ─────────────────────────────
-  useEffect(() => {
-    if (!token) return;
-    wsService.connect(token);
+  const selectedFYRef = useRef(selectedFY);
+  selectedFYRef.current = selectedFY;
+  const selectedCompanyRef = useRef(selectedCompany);
+  selectedCompanyRef.current = selectedCompany;
 
-    const unSynced   = wsService.on('synced',   (d) => { showToast('✅ Tally data synced', 'success'); loadCompanies(); setSyncVersion(v => v + 1); });
-    const unUnpaired = wsService.on('unpaired', (d) => { setIsPaired(false); localStorage.removeItem('isPaired'); showToast('⚠️ Tally unpaired', 'warning'); });
-    const unLogout   = wsService.on('logout',   (d) => logout());
-    // Auto-refresh everything after successful pairing
-    const unPaired   = wsService.on('paired', async (d) => {
-      localStorage.setItem('isPaired', 'true');
-      setIsPaired(true);
-      showToast(`✅ Paired with ${d?.deviceName || 'Desktop App'}! Loading your data...`, 'success');
-      await loadCompanies(); // Load real companies + years immediately
-    });
+  const clearCompaniesState = useCallback(() => {
+    localStorage.removeItem('companies');
+    localStorage.removeItem('selectedCompany');
+    localStorage.removeItem('selectedFY');
+    setCompanies([]);
+    setSelectedCompany(null);
+    setSelectedFY(null);
+  }, []);
 
-    return () => { unSynced(); unUnpaired(); unLogout(); unPaired(); wsService.disconnect(); };
-  }, [token]);
+  const applyCompanies = useCallback((arr, { preserveGuid, activeGuid, forceDefaultFY } = {}) => {
+    localStorage.setItem('companies', JSON.stringify(arr));
+    setCompanies(arr);
+    if (!arr.length) {
+      localStorage.removeItem('selectedCompany');
+      localStorage.removeItem('selectedFY');
+      setSelectedCompany(null);
+      setSelectedFY(null);
+      return;
+    }
+
+    const preferredGuid = preserveGuid || activeGuid || selectedCompanyRef.current?.guid;
+    const freshComp = preferredGuid
+      ? (arr.find(c => c.guid === preferredGuid)
+        || (activeGuid ? arr.find(c => c.guid === activeGuid) : null)
+        || arr[0])
+      : (activeGuid ? arr.find(c => c.guid === activeGuid) : null) || arr[0];
+    localStorage.setItem('selectedCompany', JSON.stringify(freshComp));
+    setSelectedCompany(freshComp);
+
+    let fy = forceDefaultFY ? null : selectedFYRef.current;
+    if (!forceDefaultFY && fy && freshComp?.years?.length) {
+      const match = freshComp.years.find(
+        y => y.uniqueId === fy.uniqueId
+          || (y.finYear && fy.finYear && y.finYear === fy.finYear)
+          || (y.startDate === fy.startDate && y.endDate === fy.endDate),
+      );
+      fy = match || fy;
+    }
+    if (!fy && freshComp?.years?.length) {
+      fy = pickDefaultFY(freshComp);
+    }
+    if (fy) {
+      const prev = selectedFYRef.current;
+      if (prev?.uniqueId !== fy.uniqueId || prev?.startDate !== fy.startDate) {
+        localStorage.setItem('selectedFY', JSON.stringify(fy));
+        setSelectedFY(fy);
+      }
+    } else {
+      localStorage.removeItem('selectedFY');
+      setSelectedFY(null);
+    }
+  }, []);
 
   const showToast = (message, type = 'info') => {
     setSyncToast({ message, type });
     setTimeout(() => setSyncToast(null), 4000);
   };
 
-  // ── Load companies from real API ──────────────────────────────────────────
-  const loadCompanies = useCallback(async () => {
-    if (!token) return;
+  const loadCompanies = useCallback(async ({ forceDefaultFY = false } = {}) => {
+    if (!token) return [];
     try {
-      const res = await api.fetchCompanies();
-      const list = res?.data?.companies || res?.data || [];
-      const arr = Array.isArray(list) ? list : [];
-      localStorage.setItem('companies', JSON.stringify(arr));
-      setCompanies(arr);
-
-      if (arr.length > 0) {
-        // Always refresh the selected company with fresh data (picks up new FY years)
-        const currentGuid = selectedCompany?.guid;
-        const freshComp = currentGuid
-          ? (arr.find(c => c.guid === currentGuid) || arr[0])
-          : arr[0];
-        localStorage.setItem('selectedCompany', JSON.stringify(freshComp));
-        setSelectedCompany(freshComp);
-
-        // Reset selectedFY if it points to a future year with no data
-        const today = new Date().toISOString().slice(0, 10);
-        if (selectedFY && selectedFY.startDate > today) {
-          // Current selection is a future FY — reset to latest past FY
-          const fyWithData = [...freshComp.years].reverse().find(y => y.startDate <= today);
-          if (fyWithData) {
-            localStorage.setItem('selectedFY', JSON.stringify(fyWithData));
-            setSelectedFY(fyWithData);
-          }
-        }
-
-        // Auto-select latest FY with data (not a future FY that has no vouchers yet)
-        if (freshComp?.years?.length && !selectedFY) {
-          const today = new Date().toISOString().slice(0, 10);
-          // Pick the latest FY whose start date is on or before today
-          const fyWithData = [...freshComp.years]
-            .reverse()
-            .find(y => y.startDate <= today);
-          const defaultFY = fyWithData || freshComp.years[freshComp.years.length - 1];
-          localStorage.setItem('selectedFY', JSON.stringify(defaultFY));
-          setSelectedFY(defaultFY);
-        }
-      }
+      const activeGuid = await resolveActiveCompanyGuid();
+      const preserve = selectedCompanyRef.current?.guid;
+      const arr = await fetchCompaniesHydrated({ forGuid: preserve || activeGuid || undefined });
+      const stillValid = !!(preserve && arr.some(c => c.guid === preserve));
+      applyCompanies(arr, {
+        preserveGuid: stillValid ? preserve : (activeGuid || undefined),
+        activeGuid,
+        forceDefaultFY: forceDefaultFY || !stillValid,
+      });
       return arr;
     } catch (err) {
       console.warn('fetchCompanies failed:', err.message);
       return [];
     }
-  }, [token, selectedCompany]);
+  }, [token, applyCompanies]);
 
-  // Refresh user profile from backend on mount
+  const loadCompaniesRef = useRef(loadCompanies);
+  loadCompaniesRef.current = loadCompanies;
+
+  const clearCompaniesRef = useRef(clearCompaniesState);
+  clearCompaniesRef.current = clearCompaniesState;
+
+  // ── Connect WebSocket when token is available ─────────────────────────────
+  useEffect(() => {
+    if (!token) return;
+    wsService.connect(token);
+
+    const unSynced   = wsService.on('synced',   () => {
+      showToast('✅ Tally data synced', 'success');
+      invalidateStockCache(selectedCompanyRef.current?.guid);
+      loadCompanies();
+      setSyncVersion(v => v + 1);
+    });
+    const unUnpaired = wsService.on('unpaired', () => {
+      setIsPaired(false);
+      localStorage.setItem('isPaired', 'false');
+      clearCompaniesRef.current();
+      showToast('⚠️ Tally unpaired', 'warning');
+    });
+    const unLogout   = wsService.on('logout',   () => logout());
+    const unPaired   = wsService.on('paired', async (d) => {
+      localStorage.setItem('isPaired', 'true');
+      setIsPaired(true);
+      showToast(`✅ Paired with ${d?.deviceName || 'Desktop App'}! Loading your data...`, 'success');
+      await loadCompaniesRef.current();
+    });
+
+    return () => { unSynced(); unUnpaired(); unLogout(); unPaired(); wsService.disconnect(); };
+  }, [token]);
+
+  const refreshPairingStatus = useCallback(async ({ hydrateCompanies = false } = {}) => {
+    if (!token) return false;
+    try {
+      const res = await fetchTallySyncStatus();
+      const data = res?.data ?? res;
+      const paired = !!(data?.is_paired ?? data?.isPaired);
+      const wasPaired = localStorage.getItem('isPaired') === 'true';
+      localStorage.setItem('isPaired', paired ? 'true' : 'false');
+      setIsPaired(paired);
+      setIsDesktopOnline(!!data?.desktop_online);
+      if (!paired) {
+        clearCompaniesState();
+      } else if (hydrateCompanies || !wasPaired) {
+        await loadCompaniesRef.current();
+      }
+      return paired;
+    } catch {
+      return localStorage.getItem('isPaired') === 'true';
+    }
+  }, [token, clearCompaniesState]);
+
   useEffect(() => {
     if (!token) return;
     fetchMe()
@@ -108,104 +189,140 @@ export function AuthProvider({ children }) {
           setUser(fresh);
         }
       })
-      .catch(() => {}); // silent - network error or token expired, don't crash
+      .catch(() => {});
   }, [token]);
 
-  // Load companies on mount
-  useEffect(() => { if (token) loadCompanies(); }, [token]);
+  useEffect(() => {
+    if (token && !authBootstrapping && isPaired) loadCompanies();
+  }, [token, authBootstrapping, isPaired, loadCompanies]);
+
+  useEffect(() => {
+    if (!token) return;
+    refreshPairingStatus({ hydrateCompanies: true });
+    const id = setInterval(() => refreshPairingStatus(), 10000);
+    return () => clearInterval(id);
+  }, [token, refreshPairingStatus]);
 
   const login = async (authToken, userData) => {
-    localStorage.setItem('authToken', authToken);
-    localStorage.setItem('authUser', JSON.stringify(userData));
-    setToken(authToken);
-    setUser(userData);
-
-    // Fetch /api/auth/me to get real isPaired + company state
+    setAuthBootstrapping(true);
     try {
-      const apiBase = import.meta.env.VITE_API_URL?.replace('/app', '') || 'http://localhost:3001';
-      const meRes = await fetch(`${apiBase}/api/auth/me`, {
-        headers: { 'Authorization': `Bearer ${authToken}`, 'Content-Type': 'application/json' }
-      });
-      const meData = await meRes.json();
-      const me = meData?.data;
-      if (me) {
-        const freshUser = { ...userData, ...me };
-        localStorage.setItem('authUser', JSON.stringify(freshUser));
-        setUser(freshUser);
-        if (me.is_paired) {
-          localStorage.setItem('isPaired', 'true');
-          setIsPaired(true);
-        } else {
-          localStorage.setItem('isPaired', 'false');
-          setIsPaired(false);
+      let freshUser = userData;
+      let paired = false;
+
+      try {
+        const meRes = await fetchMeWithToken(authToken);
+        const me = meRes?.data;
+        if (me) {
+          freshUser = { ...userData, ...me };
+          paired = !!(me.is_paired ?? me.isPaired);
         }
-        // Load companies if paired
-        if (me.is_paired && me.company?.guid) {
-          const comp = me.company;
-          // Fetch full companies list
-          const compRes = await fetch(`${apiBase}/api/companies`, {
-            headers: { 'Authorization': `Bearer ${authToken}`, 'Content-Type': 'application/json' }
-          });
-          const compData = await compRes.json();
-          const arr = compData?.data || [];
-          if (arr.length > 0) {
-            localStorage.setItem('companies', JSON.stringify(arr));
-            setCompanies(arr);
-            localStorage.setItem('selectedCompany', JSON.stringify(arr[0]));
-            setSelectedCompany(arr[0]);
-          } else {
-            // Fallback: use company from me endpoint
-            localStorage.setItem('companies', JSON.stringify([comp]));
-            setCompanies([comp]);
-            localStorage.setItem('selectedCompany', JSON.stringify(comp));
-            setSelectedCompany(comp);
+      } catch (e) {
+        console.warn('fetchMe during login failed:', e.message);
+      }
+
+      let companiesArr = [];
+      if (paired) {
+        try {
+          const activeGuid = await resolveActiveCompanyGuid(authToken);
+          companiesArr = await fetchCompaniesHydrated({ bearer: authToken, forGuid: activeGuid || undefined });
+          if (companiesArr.length) {
+            applyCompanies(companiesArr, { activeGuid, forceDefaultFY: true });
           }
+        } catch (e) {
+          console.warn('fetchCompanies during login failed:', e.message);
         }
       }
-    } catch (e) {
-      console.warn('Login bootstrap failed:', e.message);
+
+      localStorage.setItem('authToken', authToken);
+      localStorage.setItem('authUser', JSON.stringify(freshUser));
+      localStorage.setItem('isPaired', paired ? 'true' : 'false');
+
+      setUser(freshUser);
+      setIsPaired(paired);
+      if (!paired || !companiesArr.length) {
+        clearCompaniesState();
+      }
+      setToken(authToken);
+      tryAutoRegisterPush().catch(() => {});
+
+      return { paired, hasCompanies: companiesArr.length > 0 };
+    } finally {
+      setAuthBootstrapping(false);
     }
   };
 
-  const logout = () => {
-    // Keep isPaired in localStorage - pairing is device-level, not session-level
+  const logout = async () => {
+    try {
+      await api.logoutApi({});
+    } catch (err) {
+      console.warn('[auth] logout API failed:', err?.message || err);
+    }
     const pairedState = localStorage.getItem('isPaired');
     localStorage.clear();
     if (pairedState) localStorage.setItem('isPaired', pairedState);
-    setToken(null); setUser(null); setCompanies([]); setSelectedCompany(null);
+    setToken(null); setUser(null); setCompanies([]); setSelectedCompany(null); setSelectedFY(null);
     wsService.disconnect();
   };
 
-  const selectCompany = (company) => {
-    localStorage.setItem('selectedCompany', JSON.stringify(company));
-    setSelectedCompany(company);
-    // Auto-select latest FY when company changes
-    if (company?.years?.length) {
-      const latestFY = company.years[company.years.length - 1];
-      localStorage.setItem('selectedFY', JSON.stringify(latestFY));
-      setSelectedFY(latestFY);
+  const selectCompany = useCallback(async (company) => {
+    if (!company?.guid) return;
+    let full = company;
+    if (!company.years?.length) {
+      try {
+        const yearsRes = await fetchCompanyYears(company.guid);
+        const years = normalizeCompanyYears(company.guid, yearsRes);
+        full = { ...company, years };
+        setCompanies(prev => prev.map(c => (c.guid === company.guid ? full : c)));
+      } catch (err) {
+        console.warn('fetchCompanyYears failed:', err.message);
+      }
     }
-  };
+    localStorage.setItem('selectedCompany', JSON.stringify(full));
+    setSelectedCompany(full);
+    const fy = pickDefaultFY(full);
+    if (fy) {
+      localStorage.setItem('selectedFY', JSON.stringify(fy));
+      setSelectedFY(fy);
+    }
+  }, []);
 
-  const selectFY = (fy) => {
+  const selectFY = useCallback((fy) => {
+    if (!fy?.uniqueId) return;
+    const prev = selectedFYRef.current;
+    if (prev?.uniqueId === fy.uniqueId) return;
     localStorage.setItem('selectedFY', JSON.stringify(fy));
     setSelectedFY(fy);
-  };
+  }, []);
 
-  const markPaired = () => {
+  const markPaired = useCallback(() => {
     localStorage.setItem('isPaired', 'true');
     setIsPaired(true);
-  };
+  }, []);
+
+  const markUnpaired = useCallback(() => {
+    localStorage.setItem('isPaired', 'false');
+    setIsPaired(false);
+    setIsDesktopOnline(false);
+    clearCompaniesState();
+  }, [clearCompaniesState]);
+
+  const unpairFromTally = useCallback(async () => {
+    await api.unpairTally();
+    localStorage.setItem('isPaired', 'false');
+    setIsPaired(false);
+    setIsDesktopOnline(false);
+    clearCompaniesState();
+    showToast('⚠️ Tally unpaired', 'warning');
+  }, [clearCompaniesState]);
 
   return (
     <AuthContext.Provider value={{
-      token, user, companies, selectedCompany, selectedFY, isPaired, syncToast, syncVersion,
-      login, logout, selectCompany, selectFY, loadCompanies, markPaired, showToast,
+      token, user, companies, selectedCompany, selectedFY, isPaired, isDesktopOnline, authBootstrapping, syncToast, syncVersion,
+      login, logout, selectCompany, selectFY, loadCompanies, markPaired, markUnpaired, unpairFromTally, refreshPairingStatus, showToast,
     }}>
       {children}
-      {/* Global sync toast */}
       {syncToast && (
-        <div className={`fixed bottom-6 left-1/2 -translate-x-1/2 z-[9999] flex items-center gap-3 px-5 py-3 rounded-xl shadow-notion-lg text-sm font-medium text-white transition-all
+        <div className={`fixed bottom-6 left-1/2 -translate-x-1/2 z-[9999] flex items-center gap-3 px-5 py-3 rounded-xl shadow-lg text-sm font-medium text-white transition-all
           ${syncToast.type === 'success' ? 'bg-[#059669]' : syncToast.type === 'warning' ? 'bg-amber-500' : 'bg-[#1A1A1A]'}`}>
           {syncToast.message}
         </div>

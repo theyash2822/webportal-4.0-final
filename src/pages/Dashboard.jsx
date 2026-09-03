@@ -1,320 +1,638 @@
-import { useState, useEffect, useMemo } from 'react';
-import { useNavigate } from 'react-router-dom';
-import { useAuth } from '../contexts/AuthContext';
-import wsService from '../services/websocket';
+import { useState, useEffect, useMemo, useRef } from 'react';
+import { useNavigate, useParams } from 'react-router-dom';
 import {
-  TrendingUp, TrendingDown, ExternalLink,
-  AlertCircle, Link2, RefreshCw
+  TrendingUp, TrendingDown, BarChart3, LineChart as LineIcon,
+  ShoppingCart, Wallet,
+  ArrowUpCircle, ArrowDownCircle, Maximize2,
 } from 'lucide-react';
 import {
-  AreaChart, Area, XAxis, YAxis, CartesianGrid,
-  Tooltip, ResponsiveContainer
+  AreaChart, Area, BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, Cell,
 } from 'recharts';
 import api from '../services/api';
-import { useSettings } from '../contexts/SettingsContext';
+import { useAuth } from '../contexts/AuthContext';
+import { resolvePeriodDates, DASHBOARD_PERIOD_CODE } from '../utils/periodDates';
+import {
+  Page, Card, Panel, Button, Pill, Bar as MiniBar, Empty, Skeleton,
+  Tabs, ChartTooltip, CHART_AXIS, CHART_GRID, SERIES, useLabelT,
+} from '../components/kit';
+import { useFmt, PartyPanel } from './shared';
+import KpiPanel, { KPI_KEYS } from './KpiPanel';
+import CashflowReportDrawer from '../components/CashflowReportDrawer';
 
-const CUSTOMER_COLORS = ['#1A1A1A', '#0D9488', '#D97706', '#E5484D', '#798692'];
+/* Count-up for headline figures — eases the raw number in over ~0.8s, formatted per frame. */
+function AnimatedNumber({ value, format, testid, className = '' }) {
+  const target = Number(value) || 0;
+  const [shown, setShown] = useState(0);
+  const prevRef = useRef(0);
+  useEffect(() => {
+    const from = prevRef.current;
+    prevRef.current = target;
+    if (from === target) { setShown(target); return; }
+    if (window.matchMedia?.('(prefers-reduced-motion: reduce)').matches) { setShown(target); return; }
+    let raf;
+    const t0 = performance.now();
+    const dur = 800;
+    const tick = now => {
+      const p = Math.min(1, (now - t0) / dur);
+      const eased = 1 - Math.pow(1 - p, 3);
+      setShown(from + (target - from) * eased);
+      if (p < 1) raf = requestAnimationFrame(tick);
+    };
+    raf = requestAnimationFrame(tick);
+    return () => cancelAnimationFrame(raf);
+  }, [target]);
+  return <span data-testid={testid} className={className}>{format(shown)}</span>;
+}
 
-const ChartTip = ({ active, payload, label }) => {
-  if (!active || !payload?.length) return null;
+/* Tiny inline trend line for the Sales/Purchases/Expenses strip. */
+function Sparkline({ points, color, width = 72, height = 26 }) {
+  if (!points || points.length < 2) return null;
+  const min = Math.min(...points);
+  const max = Math.max(...points);
+  const range = max - min || 1;
+  const step = width / (points.length - 1);
+  const d = points
+    .map((v, i) => `${i === 0 ? 'M' : 'L'}${(i * step).toFixed(1)},${(height - 2 - ((v - min) / range) * (height - 4)).toFixed(1)}`)
+    .join(' ');
   return (
-    <div className="bg-[#1A1A1A] rounded-xl px-4 py-3 shadow-xl text-xs min-w-[140px]">
-      <p className="text-[#9FA9B1] mb-2 font-medium">{label}</p>
-      {payload.map((p, i) => (
-        <div key={i} className="flex items-center justify-between gap-4 mb-1 last:mb-0">
-          <div className="flex items-center gap-1.5">
-            <div className="w-2 h-2 rounded-full" style={{ background: p.color }} />
-            <span className="text-[#9FA9B1] capitalize">{p.name}</span>
-          </div>
-          <span className="font-semibold text-white">₹{Math.abs(p.value).toFixed(1)}K</span>
-        </div>
-      ))}
-    </div>
-  );
-};
-
-function KPICard({ label, value, sub, color, loading }) {
-  return (
-    <div className="bg-white border border-[#D4D3CE] rounded-xl p-5 hover:shadow-md transition-all">
-      <div className="flex items-start justify-between mb-3">
-        <p className="text-[11px] font-semibold text-[#AEACA8] uppercase tracking-widest">{label}</p>
-        <div className="w-1.5 h-1.5 rounded-full mt-1 flex-shrink-0" style={{ background: color }} />
-      </div>
-      {loading
-        ? <div className="h-7 w-24 bg-[#F5F4EF] rounded-lg animate-pulse" />
-        : <p className="text-2xl font-bold text-[#1A1A1A] tracking-tight">{value}</p>
-      }
-      <p className="text-xs text-[#AEACA8] mt-1.5 truncate">{sub}</p>
-    </div>
+    <svg width={width} height={height} viewBox={`0 0 ${width} ${height}`} className="flex-shrink-0" aria-hidden="true">
+      <path d={d} fill="none" stroke={color} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" />
+    </svg>
   );
 }
 
-function ChartCard({ title, sub, action, onAction, children }) {
+/* Trend pill: 0% is grey + black (neither good nor bad). No prior → em dash.
+   invert: liabilities — a rise is red. */
+function TrendChip({ pct, invert = false }) {
+  if (pct == null || !Number.isFinite(Number(pct))) {
+    return (
+      <span className="inline-flex flex-shrink-0 items-center rounded-full bg-paper-2 px-2 py-0.5 text-[11px] font-bold tabular text-ink-faint">—</span>
+    );
+  }
+  if (Number(pct) === 0) {
+    return (
+      <span className="inline-flex flex-shrink-0 items-center rounded-full bg-paper-2 px-2 py-0.5 text-[11px] font-bold tabular text-ink">0%</span>
+    );
+  }
+  const up = Number(pct) > 0;
+  const good = invert ? !up : up;
   return (
-    <div className="bg-white border border-[#D4D3CE] rounded-xl p-5">
-      <div className="flex items-start justify-between mb-4">
-        <div>
-          <p className="text-sm font-semibold text-[#1A1A1A]">{title}</p>
-          {sub && <p className="text-xs text-[#AEACA8] mt-0.5">{sub}</p>}
-        </div>
-        {action && (
-          <button onClick={onAction} className="flex items-center gap-1 text-xs text-[#1A1A1A] hover:text-[#787774] font-medium transition-colors">
-            {action} <ExternalLink size={11} />
-          </button>
-        )}
-      </div>
-      {children}
-    </div>
-  );
-}
-
-function EmptyState({ paired, message }) {
-  return (
-    <div className="flex flex-col items-center justify-center gap-2 py-10">
-      <div className="w-8 h-8 rounded-full bg-[#F5F4EF] flex items-center justify-center">
-        <AlertCircle size={14} className="text-[#AEACA8]" />
-      </div>
-      <p className="text-xs text-[#AEACA8] text-center max-w-[160px]">
-        {message || (paired ? 'No data for this period' : 'Pair desktop app to see real data')}
-      </p>
-    </div>
+    <span className={`inline-flex flex-shrink-0 items-center gap-1 rounded-full px-2 py-0.5 text-[11px] font-bold tabular ${good ? 'bg-pos-bg text-pos' : 'bg-neg-bg text-neg'}`}>
+      {up ? <TrendingUp size={11} strokeWidth={2.5} /> : <TrendingDown size={11} strokeWidth={2.5} />}
+      {up ? '+' : ''}{Number(pct)}%
+    </span>
   );
 }
 
 export default function Dashboard() {
-  const { formatAmount, formatAmountCompact, formatDate } = useSettings();
+  const lt = useLabelT();
   const navigate = useNavigate();
-  const { isPaired, selectedCompany, selectedFY, loadCompanies, syncVersion } = useAuth();
-  const fyLabel = selectedFY?.name ? `FY ${selectedFY.name}` : 'FY 2025-26';
+  const { key: routeKey } = useParams();
+  const [drill, setDrill] = useState(routeKey && KPI_KEYS.includes(routeKey) ? routeKey : null);
+  const { selectedCompany, selectedFY, isPaired, authBootstrapping, syncVersion } = useAuth();
+  const { money, mc } = useFmt();
 
-  const [dashData, setDashData] = useState(null);
-  const [loading, setLoading]   = useState(true);
-  const [error, setError]       = useState(null);
-  const [lastSync, setLastSync] = useState(null);
-
-  const fmtL = n => {
-    if (!n || isNaN(n) || Number(n) === 0) return '—';
-    const num = Number(n);
-    if (num >= 10000000) return '₹' + (num / 10000000).toFixed(2) + ' Cr';
-    if (num >= 100000)   return '₹' + (num / 100000).toFixed(2) + ' L';
-    return formatAmount(num);
-  };
+  const [metrics, setMetrics] = useState({ tiles: [] });
+  const [chartData, setChartData] = useState({ series: [], interval: null });
+  const [kpiStrip, setKpiStrip] = useState([]);
+  const [costAnalysis, setCostAnalysis] = useState({ total_raw: 0, heads: [] });
+  const [costFailed, setCostFailed] = useState(false);
+  const [recent, setRecent] = useState([]);
+  const [cashflow, setCashflow] = useState(null);
+  const [topCustomers, setTopCustomers] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState('');
+  const [loadWarn, setLoadWarn] = useState('');
+  const [period, setPeriod] = useState('1 Month');
+  const [chart, setChart] = useState('bar');
+  const [cashflowOpen, setCashflowOpen] = useState(false);
+  const [partyName, setPartyName] = useState(null);
+  const hasDataRef = useRef(false);
+  const prevCompanyRef = useRef(selectedCompany?.guid);
 
   const load = () => {
-    if (!selectedCompany?.guid) { setLoading(false); return; }
-    setLoading(true);
-    setError(null);
-    api.fetchDashboard({
-      companyGuid: selectedCompany.guid,
-      fromDate: selectedFY?.startDate,
-      toDate:   selectedFY?.endDate,
-    })
-      .then(res => {
-        if (res?.data) setDashData(res.data);
-        else setError('Server returned no data. Please try again.');
+    if (prevCompanyRef.current !== selectedCompany?.guid) {
+      prevCompanyRef.current = selectedCompany?.guid;
+      hasDataRef.current = false;
+    }
+    const soft = hasDataRef.current;
+    if (!soft) setLoading(true);
+    setError('');
+    setLoadWarn('');
+    setCostFailed(false);
+    if (authBootstrapping) {
+      if (!soft) setLoading(true);
+      return;
+    }
+    if (!isPaired) {
+      setMetrics({ tiles: [] });
+      setChartData({ series: [], interval: null });
+      setKpiStrip([]);
+      setCostAnalysis({ total_raw: 0, heads: [] });
+      setRecent([]);
+      setCashflow(null);
+      setTopCustomers([]);
+      setLoading(false);
+      return;
+    }
+    if (!selectedCompany?.guid || !selectedFY?.startDate || !selectedFY?.endDate) {
+      setMetrics({ tiles: [] });
+      setChartData({ series: [], interval: null });
+      setKpiStrip([]);
+      setCostAnalysis({ total_raw: 0, heads: [] });
+      setRecent([]);
+      setCashflow(null);
+      setTopCustomers([]);
+      setError(lt('Select a company to load the dashboard.'));
+      setLoading(false);
+      return;
+    }
+    const code = DASHBOARD_PERIOD_CODE[period] || '1M';
+    const { from, to } = resolvePeriodDates(code, {
+      from: selectedFY.startDate,
+      to: selectedFY.endDate,
+    });
+    const guid = selectedCompany.guid;
+    Promise.allSettled([
+      api.loadMobileDashboard(guid, code, from, to),
+      api.aggregateTopCustomersFromInvoices(guid, from, to),
+      api.aggregateCostFromExpenses(guid, from, to),
+      // Web chart UI — backend serves series here (metrics tiles only on /metrics, same as mobile).
+      api.fetchDashboardChart(guid, code, from, to),
+    ])
+      .then((results) => {
+        const [dashResult, custResult, costResult, chartResult] = results;
+        const failed = [];
+        if (dashResult.status === 'rejected') {
+          failed.push('dashboard');
+          console.warn('[dashboard] mobile bundle failed:', dashResult.reason?.message || dashResult.reason);
+        } else if (dashResult.value?.failed?.length) {
+          dashResult.value.failed.forEach((s) => failed.push(s));
+        }
+        if (custResult.status === 'rejected') {
+          failed.push('customers');
+          console.warn('[dashboard] top customers failed:', custResult.reason?.message || custResult.reason);
+        }
+        if (costResult.status === 'rejected') {
+          failed.push('cost');
+          console.warn('[dashboard] cost breakdown failed:', costResult.reason?.message || costResult.reason);
+        }
+        if (dashResult.status === 'rejected') {
+          throw new Error(lt('Failed to load dashboard'));
+        }
+        if (failed.length) {
+          setLoadWarn(lt('Some dashboard sections failed to load. Tap Retry or check Tally sync.'));
+        }
+
+        const dash = dashResult.value;
+        const chartRes = chartResult.status === 'fulfilled' ? chartResult.value : null;
+        setMetrics(dash.metrics || { tiles: [], series: [] });
+        setChartData({
+          series: chartRes?.series?.length ? chartRes.series : (dash.metrics?.series || []),
+          interval: chartRes?.interval || dash.metrics?.interval || null,
+        });
+        setKpiStrip(dash.kpiStrip || []);
+        setCashflow(dash.cashflow);
+        setTopCustomers(custResult.status === 'fulfilled' ? (custResult.value || []) : []);
+        setRecent(api.unwrapList(dash.recent).map(a => {
+          const label = String(a.label || '');
+          const hash = label.indexOf('#');
+          return {
+            id: a.id || a.guid,
+            guid: a.guid,
+            party_name: a.party || '',
+            voucher_type: hash >= 0 ? label.slice(0, hash).trim() : (label || (a.is_credit ? 'Receipt' : 'Voucher')),
+            voucher_number: hash >= 0 ? label.slice(hash + 1).trim() : '',
+            amount: Number(a.amount_raw ?? a.amount ?? 0),
+          };
+        }));
+        const failedCost = costResult.status === 'rejected';
+        setCostFailed(failedCost);
+        setCostAnalysis(failedCost ? { total_raw: 0, heads: [] } : (costResult.value || { total_raw: 0, heads: [] }));
+        hasDataRef.current = true;
       })
-      .catch(err => {
-        setError(err?.response?.data?.message || err?.message || 'Failed to load dashboard');
+      .catch(e => {
+        setMetrics({ tiles: [] });
+        setChartData({ series: [], interval: null });
+        setKpiStrip([]);
+        setCostAnalysis({ total_raw: 0, heads: [] });
+        setCostFailed(true);
+        setRecent([]);
+        setCashflow(null);
+        setTopCustomers([]);
+        setError(e.message || lt('Failed to load dashboard'));
       })
       .finally(() => setLoading(false));
   };
 
-  useEffect(() => { setDashData(null); load(); }, [selectedCompany?.guid, selectedFY?.uniqueId, syncVersion]);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  useEffect(load, [
+    selectedCompany?.guid,
+    selectedFY?.uniqueId,
+    period,
+    isPaired,
+    authBootstrapping,
+    syncVersion,
+  ]);
 
-  useEffect(() => {
-    const unsub = wsService.on('synced', () => {
-      setLastSync(new Date().toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit' }));
-      loadCompanies();
-      load();
-    });
-    return unsub;
-  }, []);
+  const tileOf = (...ids) => (metrics.tiles || []).find(t => ids.includes(t.id));
+  const tileAmt = id => Number((id === 'purchases' ? tileOf('purchases', 'purchase') : tileOf(id))?.amount_raw || 0);
+  const salesTotal = tileAmt('sales');
+  const purchaseTotal = tileAmt('purchases');
+  const expensesPeriod = tileAmt('expenses');
 
-  const revenueData = useMemo(() => {
-    if (!Array.isArray(dashData?.monthlySales) || dashData.monthlySales.length === 0) return [];
-    return dashData.monthlySales.map(r => ({
-      month:    r.month,
-      Revenue:  Math.round((r.sales    || 0) / 1000),
-      Purchase: Math.round((r.purchase || 0) / 1000),
+  const displaySeries = useMemo(() => {
+    const fromApi = (chartData.series || []).map(r => ({
+      month: r.label || r.date,
+      Sales: Number(r.sales || 0),
+      Purchase: Number(r.purchase || 0),
+      Expenses: Number(r.expenses || 0),
     }));
-  }, [dashData]);
+    if (fromApi.length) return fromApi;
+    if (salesTotal || purchaseTotal || expensesPeriod) {
+      return [{ month: period, Sales: salesTotal, Purchase: purchaseTotal, Expenses: expensesPeriod }];
+    }
+    return [];
+  }, [chartData.series, salesTotal, purchaseTotal, expensesPeriod, period]);
 
-  const topCustomers = useMemo(() => {
-    if (!Array.isArray(dashData?.topCustomers) || dashData.topCustomers.length === 0) return [];
-    const max = dashData.topCustomers[0]?.revenue || 1;
-    return dashData.topCustomers.slice(0, 5).map(c => ({
-      name:   c.name || '—',
-      amount: fmtL(c.revenue),
-      pct:    Math.round(((c.revenue || 0) / max) * 100),
-    }));
-  }, [dashData]);
-
-  const totalRevK = revenueData.reduce((s, r) => s + r.Revenue,  0);
-  const totalPurK = revenueData.reduce((s, r) => s + r.Purchase, 0);
-
-  const kpis = [
-    { label: 'Total Revenue',  value: fmtL(dashData?.totalSales),    sub: fyLabel,       color: '#2D7D46' },
-    { label: 'Net Profit',     value: fmtL(dashData?.netProfit),      sub: 'This FY',     color: '#1A1A1A' },
-    { label: 'Receivables',    value: fmtL(dashData?.receivables),    sub: 'Outstanding', color: '#D97706' },
-    { label: 'Payables',       value: fmtL(dashData?.payables),       sub: 'Outstanding', color: '#C0392B' },
-    { label: 'Cash & Bank',    value: fmtL((dashData?.cashBalance||0)+(dashData?.bankBalance||0)), sub: 'Available', color: '#2563EB' },
-    { label: 'Total Purchase', value: fmtL(dashData?.totalPurchase),  sub: 'This FY',     color: '#798692' },
+  const tileTrend = id => {
+    const t = id === 'purchases' ? tileOf('purchases', 'purchase') : tileOf(id);
+    if (!t) return null;
+    // Dummy mobile `change: 0` is not a trend — only show % when the API compared a real prior window
+    if (Object.prototype.hasOwnProperty.call(t, 'trend_pct')) {
+      if (t.trend_pct == null || !Number.isFinite(Number(t.trend_pct))) return null;
+      return Number(t.trend_pct);
+    }
+    if (t.change == null || Number(t.change) === 0 || !Number.isFinite(Number(t.change))) return null;
+    return Number(t.change);
+  };
+  const peak = useMemo(() => displaySeries.reduce((m, r) => (r.Sales > (m?.Sales || 0) ? r : m), null), [displaySeries]);
+  const turnover = salesTotal;
+  const trio = [
+    ['Sales', salesTotal, tileTrend('sales'), SERIES[1], TrendingUp, '/sales', displaySeries.map(r => r.Sales), false],
+    ['Purchases', purchaseTotal, tileTrend('purchases'), SERIES[2], ShoppingCart, '/purchase', displaySeries.map(r => r.Purchase), false],
+    ['Expenses', expensesPeriod, tileTrend('expenses'), SERIES[4], Wallet, '/expenses', displaySeries.map(r => r.Expenses), true],
   ];
 
-  return (
-    <div className="space-y-5">
+  const maxCust = topCustomers[0]?.revenue || 1;
 
-      {/* Header */}
-      <div className="flex items-center justify-between">
+  const expenseSplit = useMemo(() => (
+    (costAnalysis.heads || []).map((e, i) => ({
+      name: e.name,
+      amount: Number(e.amount_raw || 0),
+      pct: Number(e.pct || 0),
+      color: SERIES[i % SERIES.length],
+    }))
+  ), [costAnalysis]);
+  const expenseTotal = Number(costAnalysis.total_raw || 0);
+
+  const byId = Object.fromEntries((kpiStrip || []).map(k => [k.id, k]));
+  const kpis = [
+    // last flag: invert chip colors — for liabilities a rise is unfavorable (red)
+    ['Receivables', byId.receivable?.amount_raw, 'Due from customers', SERIES[2], 'receivables', byId.receivable?.trend_pct, false],
+    ['Payables', byId.payable?.amount_raw, 'Due to suppliers', SERIES[4], 'payables', byId.payable?.trend_pct, true],
+    ['Bank balance', byId.bank?.amount_raw, '3 accounts', SERIES[3], 'bank-balance', byId.bank?.trend_pct, false],
+    ['Loans & ODs', byId.loans?.amount_raw, 'Outstanding', SERIES[4], 'loans-ods', byId.loans?.trend_pct, true],
+    ['Receipts', byId.receipts?.amount_raw, 'This period', SERIES[0], 'receipts', byId.receipts?.trend_pct, false],
+    ['Payments', byId.payments?.amount_raw, 'This period', SERIES[1], 'payments', byId.payments?.trend_pct, true],
+    ['Cash-in-hand', byId.cash?.amount_raw, 'Cash Register', SERIES[0], 'cash-in-hand', byId.cash?.trend_pct, false],
+  ];
+
+  const cashIn = Number(cashflow?.totalIncome ?? 0);
+  const cashOut = Number(cashflow?.totalExpense ?? 0);
+  const netCash = Number(cashflow?.netCash ?? 0);
+  const cfGross = Number(cashflow?.grossProfit ?? 0);
+  const cfNet = Number(cashflow?.netProfit ?? 0);
+  const incomePercentage = Number(cashflow?.incomePercentage ?? 0);
+  const cashHealthy = netCash >= 0;
+  const base = Math.max(1, cashIn, cashOut);
+  const incomePct = Math.round((cashIn / base) * 100);
+  const expensePct = Math.round((cashOut / base) * 100);
+
+  const blocks = {
+    chart: (
+      <Card className="p-6">
+      <div className="flex flex-wrap items-start justify-between gap-4">
         <div>
-          <h1 className="page-title">Dashboard</h1>
-          <p className="page-subtitle">{selectedCompany?.name || 'Select a company'} · {fyLabel}</p>
+          <p className="display text-4xl font-bold leading-none text-ink tabular tracking-tight">{mc(turnover)}</p>
+          <p className="mt-2 text-sm font-semibold uppercase tracking-wider text-ink-soft">{lt('Turnover overview')} · {lt('FY')} {selectedFY?.name || '2025-26'}</p>
         </div>
-        <button
-          onClick={load}
-          disabled={loading}
-          className="flex items-center gap-1.5 text-xs text-[#787774] hover:text-[#1A1A1A] transition-colors disabled:opacity-40"
-        >
-          <RefreshCw size={13} className={loading ? 'animate-spin' : ''} />
-          {loading ? 'Loading…' : 'Refresh'}
-        </button>
+        <div className="flex items-center gap-3">
+          <div className="hidden items-center gap-4 pr-2 sm:flex">
+            {[['Sales', SERIES[1]], ['Purchase', SERIES[2]], ['Expenses', SERIES[4]]].map(([l, c]) => (
+              <span key={l} className="flex items-center gap-2 text-xs font-semibold uppercase tracking-wider text-ink-soft">
+                <span className="h-2 w-2 rounded-sm" style={{ background: c }} />{lt(l)}
+              </span>
+            ))}
+          </div>
+          <Tabs
+            testid="dashboard-period"
+            tabs={['7 Days', '1 Month', '3 Months', '6 Months']}
+            value={period}
+            onChange={setPeriod}
+          />
+          <div className="flex items-center gap-1 rounded-lg border border-line bg-surface p-1 shadow-sm">
+            <button
+              data-testid="chart-bar-toggle"
+              onClick={() => setChart('bar')}
+              className={`flex h-8 w-8 items-center justify-center rounded-md transition-colors outline-none focus-visible:ring-2 focus-visible:ring-ink focus-visible:ring-offset-1 ${chart === 'bar' ? 'bg-ink text-white' : 'text-ink-soft hover:bg-cream hover:text-ink'}`}
+            >
+              <BarChart3 size={16} strokeWidth={2} />
+            </button>
+            <button
+              data-testid="chart-line-toggle"
+              onClick={() => setChart('area')}
+              className={`flex h-8 w-8 items-center justify-center rounded-md transition-colors outline-none focus-visible:ring-2 focus-visible:ring-ink focus-visible:ring-offset-1 ${chart === 'area' ? 'bg-ink text-white' : 'text-ink-soft hover:bg-cream hover:text-ink'}`}
+            >
+              <LineIcon size={16} strokeWidth={2} />
+            </button>
+          </div>
+        </div>
       </div>
 
-      {/* Error */}
-      {error && (
-        <div className="flex items-center gap-3 px-4 py-3 rounded-xl bg-red-50 border border-red-200 text-red-700 text-xs">
-          <AlertCircle size={14} className="flex-shrink-0" />
-          <span><strong>Error:</strong> {error}</span>
-          <button onClick={load} className="ml-auto underline font-medium">Retry</button>
-        </div>
-      )}
-
-      {/* Not paired */}
-      {!isPaired && (
-        <div className="flex items-center gap-4 px-5 py-4 rounded-xl primary-gradient">
-          <div className="w-8 h-8 rounded-lg bg-white/20 flex items-center justify-center flex-shrink-0">
-            <Link2 size={16} className="text-white" />
-          </div>
-          <div className="flex-1">
-            <p className="text-sm font-semibold text-white">Connect Tally Prime to sync your data</p>
-            <p className="text-xs text-white/60 mt-0.5">Settings → Tally ERP Sync → enter the pairing code from your desktop app</p>
-          </div>
-          <button
-            onClick={() => navigate('/settings?tab=integrations&sub=Tally+ERP+Sync')}
-            className="px-4 py-2 rounded-lg text-sm font-semibold bg-white text-[#1A1A1A] hover:bg-white/90 transition-colors flex-shrink-0"
-          >
-            Connect →
-          </button>
-        </div>
-      )}
-
-      {/* Paired */}
-      {isPaired && (
-        <div className="flex items-center gap-3 px-4 py-2.5 rounded-xl border border-[#A8D5BC] bg-[#E8F5ED]">
-          <div className="w-2 h-2 rounded-full bg-[#2D7D46] animate-pulse" />
-          <p className="text-xs font-medium text-[#1A5C32]">
-            Tally Prime connected{lastSync ? ` · Last sync: ${lastSync}` : ''}
-          </p>
-        </div>
-      )}
-
-      {/* KPI grid */}
-      <div className="grid grid-cols-6 gap-3">
-        {kpis.map((k, i) => <KPICard key={i} {...k} loading={loading} />)}
-      </div>
-
-      {/* Revenue chart + Top Customers */}
-      <div className="grid grid-cols-3 gap-4">
-
-        <div className="col-span-2">
-          <ChartCard
-            title="Revenue Overview"
-            sub={`Sales vs Purchase — ${fyLabel} (₹K)`}
-            action="Full report"
-            onAction={() => navigate('/reports')}
-          >
-            {loading ? (
-              <div className="h-[220px] bg-[#F5F4EF] rounded-lg animate-pulse" />
-            ) : revenueData.length === 0 ? (
-              <div className="h-[220px] flex items-center justify-center">
-                <EmptyState paired={isPaired} message={isPaired ? 'No monthly data for this period' : 'Pair desktop app to see chart'} />
-              </div>
-            ) : (
-              <>
-                <ResponsiveContainer width="100%" height={220}>
-                  <AreaChart data={revenueData} margin={{ top: 5, right: 5, bottom: 0, left: -10 }}>
-                    <defs>
-                      {[['r','#1A1A1A'],['p','#D97706']].map(([id,c]) => (
-                        <linearGradient key={id} id={`g${id}`} x1="0" y1="0" x2="0" y2="1">
-                          <stop offset="0%"   stopColor={c} stopOpacity={0.18} />
-                          <stop offset="100%" stopColor={c} stopOpacity={0.01} />
-                        </linearGradient>
-                      ))}
-                    </defs>
-                    <CartesianGrid strokeDasharray="2 4" stroke="#ECEEEF" vertical={false} />
-                    <XAxis dataKey="month" tick={{ fontSize: 11, fill: '#AEACA8' }} axisLine={false} tickLine={false} />
-                    <YAxis tick={{ fontSize: 10, fill: '#AEACA8' }} axisLine={false} tickLine={false} unit="K" />
-                    <Tooltip content={<ChartTip />} />
-                    <Area type="monotone" dataKey="Revenue"  stroke="#1A1A1A" strokeWidth={2.5} fill="url(#gr)" dot={false} activeDot={{ r: 4, fill: '#1A1A1A', strokeWidth: 2, stroke: '#fff' }} />
-                    <Area type="monotone" dataKey="Purchase" stroke="#D97706" strokeWidth={2}   fill="url(#gp)" dot={false} activeDot={{ r: 3, fill: '#D97706', strokeWidth: 2, stroke: '#fff' }} />
-                  </AreaChart>
-                </ResponsiveContainer>
-                <div className="flex gap-5 mt-3 pt-3 border-t border-[#ECEEEF]">
-                  {[['Revenue','#1A1A1A',totalRevK],['Purchase','#D97706',totalPurK]].map(([l,c,v]) => (
-                    <div key={l} className="flex items-center gap-2">
-                      <div className="w-3 h-1.5 rounded-full" style={{ background: c }} />
-                      <span className="text-xs text-[#AEACA8]">{l}</span>
-                      <span className="text-xs font-semibold text-[#1A1A1A]">{v > 0 ? `₹${v.toFixed(0)}K` : '—'}</span>
-                    </div>
+      <div className="mt-8">
+        {loading ? <Skeleton rows={6} /> : displaySeries.length === 0 ? <Empty /> : (
+          <ResponsiveContainer width="100%" height={280}>
+            {chart === 'bar' ? (
+              <BarChart data={displaySeries} margin={{ top: 8, right: 4, left: -14, bottom: 0 }}>
+                <CartesianGrid {...CHART_GRID} />
+                <XAxis dataKey="month" {...CHART_AXIS} />
+                <YAxis tickFormatter={v => mc(v)} width={62} {...CHART_AXIS} />
+                <Tooltip content={<ChartTooltip format={money} />} cursor={{ fill: 'rgba(26,26,26,0.035)' }} />
+                <Bar dataKey="Sales" name={lt('Sales')} radius={[4, 4, 0, 0]} maxBarSize={26}>
+                  {displaySeries.map((r, i) => (
+                    <Cell key={i} fill={peak && r.month === peak.month ? SERIES[1] : 'rgba(45,125,70,0.38)'} />
                   ))}
-                </div>
-              </>
+                </Bar>
+                <Bar dataKey="Purchase" name={lt('Purchase')} radius={[4, 4, 0, 0]} maxBarSize={26} fill="rgba(37,99,235,0.35)" />
+                <Bar dataKey="Expenses" name={lt('Expenses')} radius={[4, 4, 0, 0]} maxBarSize={26} fill="rgba(192,57,43,0.35)" />
+              </BarChart>
+            ) : (
+              <AreaChart data={displaySeries} margin={{ top: 8, right: 4, left: -14, bottom: 0 }}>
+                <defs>
+                  <linearGradient id="gs" x1="0" y1="0" x2="0" y2="1">
+                    <stop offset="0%" stopColor="var(--pos)" stopOpacity={0.22} />
+                    <stop offset="100%" stopColor="var(--pos)" stopOpacity={0.02} />
+                  </linearGradient>
+                </defs>
+                <CartesianGrid {...CHART_GRID} />
+                <XAxis dataKey="month" {...CHART_AXIS} />
+                <YAxis tickFormatter={v => mc(v)} width={62} {...CHART_AXIS} />
+                <Tooltip content={<ChartTooltip format={money} />} />
+                <Area type="monotone" dataKey="Sales" name={lt('Sales')} stroke="var(--pos)" strokeWidth={3} fill="url(#gs)" dot={false} activeDot={{ r: 5, fill: 'var(--pos)', stroke: '#fff', strokeWidth: 2 }} />
+                <Area type="monotone" dataKey="Purchase" name={lt('Purchase')} stroke="var(--note)" strokeWidth={2} strokeDasharray="5 4" fill="none" dot={false} />
+                <Area type="monotone" dataKey="Expenses" name={lt('Expenses')} stroke="var(--neg)" strokeWidth={2} strokeDasharray="2 4" fill="none" dot={false} />
+              </AreaChart>
             )}
-          </ChartCard>
+          </ResponsiveContainer>
+        )}
+      </div>
+      </Card>
+    ),
+    cost: (
+      <Panel title="Cost analysis" testid="cost-analysis-panel">
+      {costFailed ? <Empty message="Expense breakdown unavailable" /> : (<>
+      <p className="display text-4xl font-bold leading-none text-ink tabular tracking-tight">
+        <AnimatedNumber value={expenseTotal} format={mc} />
+      </p>
+      <div className="mt-5 flex h-4 w-full gap-1 overflow-hidden">
+        {expenseSplit.map((e, i) => (
+          <span key={e.name} className="hatched grow-x h-full origin-left rounded-sm"
+            style={{ width: `${e.pct}%`, background: e.color, minWidth: 6, animationDelay: `${0.1 + i * 0.06}s` }} />
+        ))}
+      </div>
+      <div className="stagger mt-6 space-y-3">
+         {expenseSplit.length === 0 ? <Empty message="No expense vouchers" /> : expenseSplit.map(e => (
+          <div key={e.name} className="flex items-center gap-3">
+            <span className="h-3 w-3 flex-shrink-0 rounded-sm" style={{ background: e.color }} />
+             <span className="flex-1 truncate text-sm font-semibold text-ink-soft">{e.name === 'Other' ? lt('Other') : e.name}</span>
+            <span className="text-sm font-bold text-ink tabular">{e.pct}%</span>
+          </div>
+        ))}
+      </div>
+      </>)}
+      </Panel>
+    ),
+    cashflow: (
+      <Panel
+        title="Cashflow"
+      testid="financial-health-panel"
+      right={
+        <span className="flex items-center gap-2 whitespace-nowrap">
+          <Pill tone={cashHealthy ? 'pos' : 'neg'}>
+            {cashHealthy ? '+' : ''}{incomePercentage}% {lt(cashHealthy ? 'Healthy' : 'Watch')}
+          </Pill>
+          <Button
+            variant="ghost"
+            data-testid="cashflow-expand-btn"
+            onClick={() => setCashflowOpen(true)}
+            title={lt('Open cashflow report')}
+          >
+            <Maximize2 size={15} strokeWidth={2} />
+          </Button>
+        </span>
+      }
+      >
+      <div className="flex flex-col items-center pt-2">
+        <p className="text-sm font-semibold uppercase tracking-wider text-ink-soft">{lt('Net Cash')}</p>
+        <p className="display mt-2 text-4xl font-bold leading-none text-ink tabular tracking-tight">
+          <AnimatedNumber value={netCash} format={mc} testid="net-cash-value" />
+        </p>
+        <div className="mt-8 w-full space-y-4">
+          {[['Income', cashIn, SERIES[1], ArrowUpCircle, incomePct], ['Expense', cashOut, SERIES[4], ArrowDownCircle, expensePct]].map(([l, v, c, Icon, pct]) => (
+            <div key={l} className="flex items-center gap-4">
+              <span className="flex w-24 flex-shrink-0 items-center gap-2 text-xs font-bold uppercase tracking-wider text-ink-soft">
+                 <Icon size={16} strokeWidth={2} style={{ color: c }} /> {lt(l)}
+              </span>
+              <span className="relative h-2.5 flex-1 overflow-hidden rounded-full" style={{ background: 'rgba(26,26,26,0.06)' }}>
+                <span className="absolute inset-y-0 left-0 rounded-full transition-[width] duration-500" style={{ width: `${pct}%`, background: c }} />
+              </span>
+              <span className="w-20 flex-shrink-0 text-right text-sm font-bold text-ink tabular">
+                <AnimatedNumber value={v} format={mc} />
+              </span>
+            </div>
+          ))}
         </div>
+        <div className="mt-8 grid w-full grid-cols-2 gap-4">
+          {[['Gross profit', cfGross], ['Net profit', cfNet]].map(([l, v]) => (
+            <div key={l} className="rounded-xl bg-paper-2 px-5 py-4">
+               <p className="text-xs font-bold uppercase tracking-wider text-ink-soft">{lt(l)}</p>
+              <p className="mt-2 text-xl font-bold text-ink tabular tracking-tight"><AnimatedNumber value={v} format={mc} /></p>
+            </div>
+          ))}
+        </div>
+      </div>
+      </Panel>
+    ),
+    customers: (
+      <Panel title="Top customers" testid="top-customers-panel">
+      {loading ? <Skeleton rows={5} /> : topCustomers.length === 0 ? <Empty /> : (
+        <div className="stagger space-y-5">
+          {topCustomers.map((c, i) => (
+            <button
+              type="button"
+              key={c.name || i}
+              data-testid={`top-customer-${i}`}
+              onClick={() => c.name && setPartyName(c.name)}
+              className="flex w-full items-center gap-4 text-left transition-opacity hover:opacity-80"
+            >
+              <span className="flex h-11 w-11 flex-shrink-0 items-center justify-center rounded-lg text-sm font-bold text-white shadow-sm" style={{ background: SERIES[i % SERIES.length] }}>
+                {(c.name || '?').split(' ').map(w => w[0]).filter(Boolean).slice(0, 2).join('') || '?'}
+              </span>
+              <div className="min-w-0 flex-1">
+                <div className="mb-2 flex items-baseline justify-between gap-4">
+                  <span className="truncate text-sm font-bold text-ink">{c.name}</span>
+                  <span className="flex-shrink-0 text-sm font-bold text-ink tabular">
+                    <AnimatedNumber value={c.revenue} format={mc} />
+                  </span>
+                </div>
+                <MiniBar pct={(c.revenue / maxCust) * 100} color={SERIES[i % SERIES.length]} height={6} />
+              </div>
+            </button>
+          ))}
+        </div>
+      )}
+      </Panel>
+    ),
+    activity: (
+      <Panel
+        title="Recent activity"
+      testid="recent-activity-panel"
+       right={<Button variant="primary" onClick={() => navigate('/audit-trail/daybook')} data-testid="dashboard-daybook">{lt('Day Book')}</Button>}
+      >
+      <div className="divide-y divide-line">
+         {loading ? <Skeleton rows={5} /> : recent.length === 0 ? <Empty message="No recent vouchers" /> : recent.map(v => (
+          <div key={v.id} className="group flex items-center gap-4 py-4 first:pt-0 last:pb-0">
+            <span className={`flex h-11 w-11 flex-shrink-0 items-center justify-center rounded-lg transition-transform group-hover:scale-105 ${
+              v.voucher_type === 'Sales' ? 'bg-pos-bg text-pos' : v.voucher_type === 'Purchase' ? 'bg-warn-bg text-warn' : 'bg-paper-2 text-ink-soft'
+            }`}>
+              {v.voucher_type === 'Purchase'
+                ? <TrendingDown size={18} strokeWidth={2} />
+                : <TrendingUp size={18} strokeWidth={2} />}
+            </span>
+            <div className="min-w-0 flex-1">
+              <p className="truncate text-sm font-bold text-ink group-hover:text-ink/80 transition-colors">{v.party_name}</p>
+              <p className="mt-1 text-xs font-bold uppercase tracking-wider text-ink-soft">{v.voucher_type} · <span className="tabular">{v.voucher_number}</span></p>
+            </div>
+            <span className="text-sm font-bold text-ink tabular">{money(v.amount)}</span>
+          </div>
+        ))}
+      </div>
+      </Panel>
+    ),
+  };
 
-        <ChartCard title="Top Customers" sub={`By revenue · ${fyLabel}`}>
-          {loading ? (
-            <div className="space-y-3 mt-1">
-              {[1,2,3,4,5].map(i => (
-                <div key={i} className="flex items-center gap-3">
-                  <div className="w-6 h-6 rounded-full bg-[#F5F4EF] animate-pulse flex-shrink-0" />
-                  <div className="flex-1 space-y-1.5">
-                    <div className="h-2.5 bg-[#F5F4EF] rounded animate-pulse w-3/4" />
-                    <div className="h-1.5 bg-[#F5F4EF] rounded animate-pulse" />
-                  </div>
-                </div>
-              ))}
-            </div>
-          ) : topCustomers.length === 0 ? (
-            <EmptyState paired={isPaired} />
-          ) : (
-            <div className="space-y-3 mt-1">
-              {topCustomers.map((c, i) => (
-                <div key={i} className="flex items-center gap-3">
-                  <div
-                    className="w-6 h-6 rounded-full flex items-center justify-center text-white text-[10px] font-bold flex-shrink-0"
-                    style={{ background: CUSTOMER_COLORS[i] }}
-                  >
-                    {(c.name[0] || '?').toUpperCase()}
-                  </div>
-                  <div className="flex-1 min-w-0">
-                    <div className="flex justify-between items-center mb-1">
-                      <span className="text-xs font-medium text-[#1A1A1A] truncate">{c.name}</span>
-                      <span className="text-xs font-semibold text-[#1A1A1A] ml-2 flex-shrink-0">{c.amount}</span>
-                    </div>
-                    <div className="w-full bg-[#ECEEEF] rounded-full h-1.5">
-                      <div className="h-1.5 rounded-full" style={{ width: `${c.pct}%`, background: CUSTOMER_COLORS[i] }} />
-                    </div>
-                  </div>
-                </div>
-              ))}
-            </div>
+  // Sales · Purchases · Expenses — three individual cards.
+  blocks.trioStrip = (
+    <div className="grid grid-cols-1 gap-4 sm:grid-cols-3">
+      {trio.map(([label, value, delta, tone, Icon, , spark, invert]) => (
+        <div
+          key={label}
+          data-testid={`trio-${label.toLowerCase()}`}
+          className="flex items-center gap-4 rounded-xl border border-line bg-surface px-5 py-4 text-left"
+        >
+          <span className="flex h-10 w-10 flex-shrink-0 items-center justify-center rounded-lg" style={{ background: `${tone}1A` }}>
+            <Icon size={18} strokeWidth={2} style={{ color: tone }} />
+          </span>
+          <span className="min-w-0 flex-1">
+            <span className="block text-xs font-semibold uppercase tracking-wider text-ink-soft">{lt(label)}</span>
+            {loading ? (
+              <span className="mt-1 block h-6 w-20 animate-pulse rounded-md bg-cream" />
+            ) : (
+              <span className="mt-0.5 block">
+                <span className="display text-2xl font-bold leading-none text-ink tabular tracking-tight">{money(value)}</span>
+              </span>
+            )}
+          </span>
+          {!loading && (
+            <span className="flex flex-shrink-0 flex-col items-end gap-1">
+              <Sparkline points={spark} color={delta == null ? tone : delta < 0 ? 'var(--neg)' : 'var(--pos)'} />
+              <TrendChip pct={delta} invert={!!invert} />
+            </span>
           )}
-        </ChartCard>
+        </div>
+      ))}
+    </div>
+  );
 
+  // Sleek KPI strip — one card, all 7 metrics as compact columns with a left color accent.
+  blocks.kpiStrip = (
+    <Card className="grid grid-cols-2 gap-px overflow-hidden bg-line sm:grid-cols-4 xl:grid-cols-7">
+      {kpis.map(([label, value, sub, tone, metric, trend, invert]) => (
+        <button
+          key={metric}
+          data-testid={`kpi-${label.toLowerCase().replace(/[^a-z]+/g, '-')}`}
+          onClick={() => setDrill(metric)}
+          className="group relative min-w-0 bg-surface px-6 py-5 text-left transition-colors duration-200 hover:bg-cream/60 outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ink"
+        >
+          <span className="absolute inset-y-5 left-3 w-1 rounded-full" style={{ background: tone }} />
+          <span className="block truncate text-[11px] font-bold uppercase tracking-wider text-ink-soft">{lt(label)}</span>
+          {loading && value != null ? (
+            <span className="mt-2.5 block h-5 w-14 animate-pulse rounded-md bg-cream" />
+          ) : (
+            <span className="mt-2 flex flex-wrap items-center gap-x-2 gap-y-1">
+              <span className="display block text-xl font-bold leading-none text-ink tabular tracking-tight">
+                {value == null ? lt('View') : mc(value)}
+              </span>
+              <TrendChip pct={trend} invert={invert} />
+            </span>
+          )}
+        </button>
+      ))}
+    </Card>
+  );
+
+  return (
+    <Page
+      testid="dashboard-page"
+      title="Dashboard"
+    >
+      {error && (
+        <div className="rounded-xl border border-neg/20 bg-neg-bg p-4 text-sm font-semibold text-neg flex items-center justify-between shadow-sm">
+           <span>{error}</span> <Button variant="danger" className="ml-4" onClick={load}>{lt('Retry')}</Button>
+        </div>
+      )}
+      {!error && loadWarn && (
+        <div className="rounded-xl border border-warn/30 bg-warn-bg p-4 text-sm font-semibold text-warn flex items-center justify-between shadow-sm">
+          <span>{loadWarn}</span>
+          <Button variant="secondary" className="ml-4" onClick={load}>{lt('Retry')}</Button>
+        </div>
+      )}
+      {/* Connection strip — only shown while Tally is NOT connected */}
+      {!isPaired && (
+        <div className="flex flex-wrap items-center gap-3 rounded-xl border border-line bg-surface px-5 py-3 shadow-sm">
+          <span className="h-2 w-2 rounded-sm bg-warn" />
+          <p className="min-w-0 flex-1 truncate text-sm font-semibold text-ink-soft">{lt('Connect Tally Prime to sync live data')}</p>
+          <Button onClick={() => navigate('/settings/tally-sync')}>{lt('Connect')}</Button>
+        </div>
+      )}
+
+
+      {/* Sales · Purchases · Expenses — three cards */}
+      {blocks.trioStrip}
+
+      {/* All 7 KPIs — one sleek strip */}
+      {blocks.kpiStrip}
+
+      {/* Turnover chart — full width */}
+      {blocks.chart}
+
+      {/* Cost analysis · Cashflow · Top customers (wider) */}
+      <div className="grid grid-cols-1 gap-4 md:grid-cols-2 xl:grid-cols-[minmax(0,1fr)_minmax(0,1fr)_minmax(0,1.4fr)]">
+        {blocks.cost}
+        {blocks.cashflow}
+        {blocks.customers}
       </div>
 
-    </div>
+      {blocks.activity}
+
+      <KpiPanel metric={drill} onClose={() => { setDrill(null); if (routeKey) navigate('/', { replace: true }); }} />
+      <CashflowReportDrawer
+        open={cashflowOpen}
+        onClose={() => setCashflowOpen(false)}
+        initialPeriod={DASHBOARD_PERIOD_CODE[period] || '1M'}
+      />
+      {partyName && <PartyPanel id={partyName} onClose={() => setPartyName(null)} />}
+    </Page>
   );
 }

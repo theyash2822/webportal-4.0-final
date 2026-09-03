@@ -5,66 +5,179 @@ Base URL: `VITE_API_URL` env var (default: `http://localhost:3001/app`)
 WebSocket: `VITE_WS_URL` env var (default: `http://localhost:3001`)
 
 ## Note
-Web portal uses `/app/*` prefix (legacy routes), NOT `/api/*`.
-Mobile V4 uses `/api/*` (new spec).
-This is by design — reconciling them is a future task.
+Auth, pairing, dashboard, and most live reads use `/api/*` (same as mobile V4).
+Some older register/ledger writes still go through `/app/*`.
 
-## Auth
+## FY params (mobile parity)
+
+`selectedFY` comes from `GET /api/company/years` → `{ finYear, startDate, endDate, label }`.
+
+| Pattern | Helper | Used for | Query params |
+|---------|--------|----------|--------------|
+| Date window | `fyDateParams(selectedFY)` | Dashboard, sales, ledgers, vouchers | `from`, `to` only |
+| FY label | `fyReportParams(selectedFY)` | P&L/BS/TB, stocks, other-taxes, KPI drilldowns | `fy` + `from` + `to` |
+| FY string | `fyInfoToParam(selectedFY)` | Same as mobile `fyInfoToParam` | `2025-2026` from `fin_year` |
+
+Dashboard home matches mobile: `period` + `from`/`to` (last N days clamped inside selected FY) — **no `fy` param**.
+
+## Auth (same `/api/auth/*` as mobile V4)
+Body uses `{ phone: "+91…" }` (E.164). Responses use `access_token`, `requires_2fa`, `is_new_user`, `is_paired`, `pre_auth_token`.
 | Function | HTTP | Endpoint |
 |----------|------|----------|
-| sendOtp | POST | /send-otp |
-| verifyOtp | POST | /verify-otp |
-| verifyPin | POST | /verify-pin |
-| setPin | POST | /set-pin |
-| removePin | DELETE | /remove-pin |
-| resetPin | POST | /reset-pin |
-| setBiometric | PATCH | /set-biometric |
-| get2FAStatus | GET | /two-fa-status |
-| fetchMe | GET | /me |
-| updateMe | POST | /me |
-| verifyToken | POST | /verify |
+| sendOtp | POST | /api/auth/send-otp `{ phone }` |
+| verifyOtp | POST | /api/auth/verify-otp `{ phone, otp, reset_pin? }` |
+| registerUser | POST | /api/auth/register `{ name, email, language }` (Bearer from OTP) |
+| verifyPin | POST | /api/auth/verify-pin `{ pin }` (pre-auth Bearer) |
+| resetPin | POST | /api/auth/reset-pin `{ pin }` (pre-auth Bearer) |
+| fetchMe | GET | /api/auth/me |
+| updateMe | PATCH | /api/auth/me |
+| logoutApi | POST | /api/auth/logout |
+| changePhone | POST | /api/auth/change-phone `{ step, … }` |
+| changeEmail | POST | /api/auth/change-email `{ step, … }` |
+| registerPushToken | POST | /api/push-token (Settings → Notification Channels → Enable browser push) |
+| removePushToken | DELETE | /api/push-token |
 
-## Pairing
+## Pairing (same as mobile V4)
 | Function | HTTP | Endpoint |
 |----------|------|----------|
-| pairDevice | POST | /pairing |
-| fetchPairingDetails | GET | /pairing-device |
-| updatePairing | PUT | /pairing |
+| fetchTallySyncStatus | GET | /api/tally-sync/status |
+| pairWithTally | POST | /api/tally-sync/pair `{ pairing_code }` |
+| unpairTally | POST | /api/tally-sync/unpair |
 
-## Companies
+## Companies (same as mobile V4)
 | Function | HTTP | Endpoint |
 |----------|------|----------|
-| fetchCompanies | GET | /companies |
+| fetchCompaniesList | GET | /api/companies → `{ id, name, gstin }` |
+| fetchCompanyYears | GET | /api/company/years?companyGuid=… |
+| fetchCompaniesHydrated | GET | both above — list + FY years for selected/first company |
 
-## Ledgers
+## Ledgers (same GET /api/ledgers as mobile)
 | Function | HTTP | Endpoint |
 |----------|------|----------|
-| fetchLedgers | POST | /ledgers |
-| fetchLedgerDetails | POST | /ledger |
-| fetchLedgerVouchers | POST | /ledger-vouchers |
-| fetchLedgerTrend | POST | /ledger-trend |
-| fetchVoucherDetail | POST | /voucher-detail |
+| fetchLedgers | GET | /api/ledgers?companyGuid&search&page&limit&from&to&fy&group&nature |
+| fetchLedgerDetails | GET | /api/ledgers/:id?companyGuid&from&to |
+| fetchLedgerVouchers | GET | /api/ledgers/:id/statement?companyGuid&from&to&fy |
+| fetchVoucherDetail | GET | /api/vouchers/:id?companyGuid |
 
-## Stocks
-(Needs verification — check src/services/api.js for full stock exports)
+## Parties
+| Function | HTTP | Endpoint |
+|----------|------|----------|
+| fetchParties / fetchPartiesList | GET | /api/parties?companyGuid&search&type |
 
-## Reports
-(Needs verification — check src/services/api.js for financial/GST/compliance exports)
+## Vouchers / Day book
+| Function | HTTP | Endpoint |
+|----------|------|----------|
+| fetchVouchers | GET | /api/vouchers?companyGuid&type&from&to&search (fallback POST /vouchers) |
+| fetchDaybook | GET | /api/daybook?companyGuid&date&from&to&page&limit |
+
+## Dashboard / search / KPI
+| Function | HTTP | Endpoint |
+|----------|------|----------|
+| **loadMobileDashboard** | GET ×4 | Same bundle as mobile home: `/api/dashboard/kpi-strip`, `/metrics`, `/cashflow`, `/recent-activity` |
+| fetchCashflow | GET | /api/dashboard/cashflow (`period`, `from`, `to`) |
+| fetchDashboardChart | GET | /api/dashboard/chart |
+| aggregateTopCustomersFromInvoices | GET | /api/sales/invoices (`from`, `to`) — client-side party rollup |
+| aggregateCostFromExpenses | GET | /api/expenses (`from`, `to`) — categories for cost panel |
+| searchGlobal | GET | /api/dashboard/search |
+| fetchNotifications | GET | /api/notifications (`companyGuid`) — same as mobile |
+| markNotificationRead | PATCH | /api/notifications/:id/read |
+| markAllNotificationsRead | PATCH | /api/notifications/read-all (`companyGuid`) |
+| fetchKpiDetail | GET | /api/kpi/:metric |
+| fetchSalesHomeMetrics | GET | /api/sales/home-metrics |
+| fetchPurchaseHomeMetrics | GET | /api/purchase/home-metrics |
+| fetchExpensesHomeMetrics | GET | /api/expenses/home-metrics |
+| fetchSalesTabMetrics | GET | /api/sales/tab-metrics (fallback: home-metrics) |
+
+## Registers
+| Function | HTTP | Endpoint |
+|----------|------|----------|
+| fetchSalesInvoices | GET | /api/sales/invoices (fallback POST /vouchers) |
+| fetchSalesOrders | GET | /api/sales/orders |
+| fetchSalesVouchers | GET | /api/sales/vouchers |
+| fetchSalesVoucherCounts | GET | /api/sales/vouchers/counts |
+| fetchSalesInvoiceCreditNoteContext | GET | /api/sales/invoices/:id/credit-note-context |
+| fetchProforma | GET | /api/sales/invoices?is_optional=true |
+| fetchQuotations | GET | /api/sales/vouchers?docTypes=quotation |
+| fetchSalesEwaybills | GET | /api/sales/ewaybills |
+| fetchPurchaseOrders | GET | /api/purchase/orders |
+| fetchPurchaseInvoices | GET | /api/purchase/invoices |
+| fetchPurchaseVouchers | GET | /api/purchase/vouchers |
+| fetchPurchaseVoucherCounts | GET | /api/purchase/vouchers/counts |
+| fetchPurchaseInvoiceDebitNoteContext | GET | /api/purchase/invoices/:id/debit-note-context |
+| fetchCreditNotes / fetchDebitNotes / fetchDeliveryNotes | GET | matching /api/* registers |
+
+## GST
+| Function | HTTP | Endpoint |
+|----------|------|----------|
+| cancelEInvoice | POST | /api/einvoice/cancel |
+| cancelEWayBill | POST | /api/ewaybills/cancel |
+| fetchCompanyCapabilities | GET | /api/company/capabilities |
+
+## Other Taxes (mobile parity)
+| Function | HTTP | Endpoint |
+|----------|------|----------|
+| fetchOtherTaxesSummary | GET | /api/reports/other-taxes/summary?companyGuid&fy |
+| fetchOtherTaxesTransactions | GET | /api/reports/other-taxes/transactions?companyGuid&taxType&fy&limit&page |
+| fetchOtherTaxesLateChallans | GET | /api/reports/other-taxes/late-challans?companyGuid&taxType&fy |
+
+Tax types: `TDS`, `TCS`, `VAT`, `CESS`, `EXCISE_DUTY`, `SERVICE_TAX`, `IMPORT_DUTY`, `EXPORT_DUTY`, `WITHHOLDING_TAX`.
+
+## Stocks (same GET /api/stocks/* as mobile)
+| Function | HTTP | Endpoint |
+|----------|------|----------|
+| fetchStocks | GET | /api/stocks/items?companyGuid&search&page&limit&category&group&warehouse |
+| fetchStockDetails | GET | /api/stocks/items/:id?companyGuid&from&to&fy |
+| fetchStockMovements | GET | /api/stocks/items/:id/movements |
+| fetchMovementAnalyticsChart | GET | /api/stocks/movement-analytics/chart |
+| fetchStockFilters | GET | /api/stocks/groups + /api/stocks/warehouses |
+| fetchStockSummary | POST | /app/stock-dashboard (same as mobile getStockDashboard) |
+| fetchWarehouses | GET | /api/stocks/warehouses |
+| barcode helpers | POST/GET | /api/inventory/barcodes* |
+| fetchBarcodesByGuids | POST | /api/inventory/barcodes/by-guids |
+| downloadBarcodeTemplate | GET | /api/inventory/barcodes/template |
+| startBulkBarcodeJob / status / active | POST/GET | /api/inventory/barcodes/generate-bulk/* |
+
+## Geo / form lookups
+| Function | HTTP | Endpoint |
+|----------|------|----------|
+| fetchGeoCountries | GET | /api/geo/countries |
+| fetchGeoStates | GET | /api/geo/states |
+| fetchTaxLedgers | GET | /api/tax/ledgers |
+| fetchChargeLedgers | GET | /api/charge-ledgers → normalizes `{ logisticsCharges, additionalCharges, roundOffLedgers }` into `{ chargeLedgers, roundOffLedgers }` (mobile create-invoice shape) |
+| fetchStockGodowns | GET | /api/stocks/items/:id/godowns → normalizes `data.warehouses[{name,qty}]` |
+| fetchCompanyProfile | GET | /api/company/profile?companyGuid (dispatch-from prefill on create forms) |
+| sendPaymentReminder | POST | /api/reminders/send |
+
+| fetchAIInsights | GET | /api/ai/insights?companyGuid&from&to&fy |
+| fetchAIInsightsHistory | GET | /api/ai/insights/history/:fy?companyGuid |
+| askHelpAI | POST | /api/ai/help `{ message, history }` |
+
+## Expenses & Financials (mobile GET parity)
+| Function | HTTP | Endpoint |
+|----------|------|----------|
+| fetchExpenses | GET | /api/expenses?companyGuid&from&to&types&limit |
+| fetchExpenseCounts | GET | /api/expenses/counts |
+| fetchCashBank | GET | /api/kpi/bank-balance + /api/kpi/cash-in-hand (merged client-side) |
+| fetchReceivablesPayables | GET | /api/kpi/receivables + /api/kpi/payables (merged client-side) |
+| fetchReportsFinancial | GET | /api/reports/financial |
+| fetchReportsPL | GET | /api/reports/pl-bs → `pl` section |
+| fetchReportsBS | GET | /api/reports/pl-bs → `bs` section |
+| fetchReportsTB | GET | /api/reports/pl-bs → `trialBalance` section |
+| fetchComplianceConfig / saveComplianceConfig | GET/POST | /api/company/:guid/compliance-config |
+| alterStockItemInTally | POST | /tally/master/stock-item-alter |
+| createBankLedgerInTally | POST | /tally/master/bank |
+| fetchTallyInvoicePreview | GET | /tally/invoice/:ref/preview |
+| shareTallyInvoicePdf | POST | /tally/invoice/:ref/share-pdf |
+| fetchMasterPreview | GET | /tally/master/:queueId/preview |
 
 ## Data Fetching Pattern
-All pages use `useApi()` hook:
-```jsx
-const { data, loading, error, reload } = useApi(() => api.fetchLedgers({ companyGuid, fy }), [companyGuid, fy]);
-```
-
-## Auth Header
-Token from `localStorage.getItem('authToken')` → `Authorization: Bearer <token>`
+Pages call helpers from `src/services/api.js` (GET `/api/*` with `companyGuid` query param — same as mobile V4).
+Legacy POST `/app/*` is used only for Tally writes and a few fallbacks (e.g. `fetchVouchers` if GET fails, `fetchStockSummary` dashboard).
 
 ## Company + FY Params
-Most endpoints require: `{ companyGuid: selectedCompany?.guid, fy: selectedFY?.fin_year }`
-Passed in POST body (not query string — differs from mobile V4)
+Most GET reads pass `companyGuid`, optional `from`/`to` or `fy` as query params via `withCompany()`.
 
 ## WebSocket
-Service: `src/services/websocket.js` (Needs verification — file not confirmed in scan)
+Service: `src/services/websocket.js`
 Connected via `AuthContext` when token is set.
-Events listened: `synced`, `unpaired`, `logout`, `paired`
+Events listened: `synced`, `unpaired`, `logout`, `paired`, `voucher:tallySynced`, `disconnect`

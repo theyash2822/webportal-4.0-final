@@ -61,6 +61,11 @@ class WebSocketService {
       console.warn('[WS] logout', data);
       this._emit('logout', data);
     });
+
+    this.socket.on('voucher:tallySynced', (data) => {
+      console.info('[WS] voucher:tallySynced', data);
+      this._emit('voucher:tallySynced', data);
+    });
   }
 
   disconnect() {

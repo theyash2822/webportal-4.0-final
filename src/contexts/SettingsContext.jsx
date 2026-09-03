@@ -6,8 +6,11 @@ import {
   getCurrencySymbol,
   DEFAULT_FORMAT_SETTINGS,
 } from '../utils/format';
+import { USE_MOCK } from '../services/config';
+import i18n, { languageToCode } from '../i18n';
 
-const API_BASE = import.meta.env.VITE_API_URL || 'http://localhost:3001/app';
+// Same-origin by default: backend is reverse-proxied at /app on the portal host.
+const API_BASE = import.meta.env.VITE_API_URL || '/app';
 
 const DEFAULT_SETTINGS = {
   language: 'English',
@@ -30,6 +33,7 @@ const SettingsContext = createContext({
 
 export function SettingsProvider({ children }) {
   const [settings, setSettings] = useState(() => {
+    /* initial state below; language applied to i18n in the effect */
     try {
       const stored = localStorage.getItem('userSettings');
       return stored ? { ...DEFAULT_SETTINGS, ...JSON.parse(stored) } : DEFAULT_SETTINGS;
@@ -38,10 +42,10 @@ export function SettingsProvider({ children }) {
     }
   });
 
-  // Sync from API on mount
+  // Sync from API on mount (skipped in mock mode — local settings are the source)
   useEffect(() => {
     const token = localStorage.getItem('authToken');
-    if (!token) return;
+    if (!token || USE_MOCK) return;
     fetch(`${API_BASE}/user-settings`, {
       headers: { Authorization: `Bearer ${token}` },
     })
@@ -56,12 +60,17 @@ export function SettingsProvider({ children }) {
       .catch(() => {});
   }, []);
 
+  // Keep the UI language in sync with the stored preference (mobile parity).
+  useEffect(() => {
+    i18n.changeLanguage(languageToCode(settings.language));
+  }, [settings.language]);
+
   const updateSettings = async (partial) => {
     const updated = { ...settings, ...partial };
     setSettings(updated);
     localStorage.setItem('userSettings', JSON.stringify(updated));
     const token = localStorage.getItem('authToken');
-    if (!token) return;
+    if (!token || USE_MOCK) return;
     try {
       await fetch(`${API_BASE}/user-settings`, {
         method: 'PATCH',
