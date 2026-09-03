@@ -11,9 +11,11 @@ const GROUPS = [
   'Cash-in-hand', 'Bank Accounts', 'Bank OD A/c', 'Fixed Assets', 'Investments',
   'Deposits (Asset)', 'Loans & Advances (Asset)', 'Current Assets', 'Capital Account',
   'Reserves & Surplus', 'Secured Loans', 'Unsecured Loans', 'Current Liabilities',
-  'Provisions', 'Duties & Taxes', 'Sales Accounts', 'Purchase Accounts', 'Direct Expenses',
+  'Provisions', 'Sales Accounts', 'Purchase Accounts', 'Direct Expenses',
   'Indirect Expenses', 'Direct Incomes', 'Indirect Incomes',
 ];
+/** Full list including Duties & Taxes — only for locked duties-taxes create path. */
+const DUTIES_GROUP = 'Duties & Taxes';
 const NO_BALANCE = new Set(['Sales Accounts', 'Purchase Accounts', 'Direct Expenses', 'Indirect Expenses', 'Direct Incomes', 'Indirect Incomes']);
 const CREDIT_GROUPS = new Set(['Capital Account', 'Reserves & Surplus', 'Secured Loans', 'Unsecured Loans', 'Current Liabilities', 'Provisions', 'Bank OD A/c']);
 const GST_GROUPS = new Set(['Sales Accounts', 'Purchase Accounts', 'Direct Expenses', 'Indirect Expenses', 'Direct Incomes', 'Indirect Incomes']);
@@ -29,9 +31,9 @@ const GST_STATE = {
   '36': 'Telangana', '37': 'Andhra Pradesh', '38': 'Ladakh',
 };
 
-function Done({ done, title, onClose }) {
+function Done({ done, title, onClose, onViewDocument }) {
   const lt = useLabelT();
-  return <><DoneState done={done} title={title} /><Button variant="primary" className="w-full" onClick={onClose} data-testid="create-done">{lt('Done')}</Button></>;
+  return <><DoneState done={done} title={title} onViewDocument={onViewDocument} /><Button variant="primary" className="w-full" onClick={onClose} data-testid="create-done">{lt('Done')}</Button></>;
 }
 
 function BalanceFields({ prefix, balance, setBalance, isCr, setIsCr }) {
@@ -51,10 +53,17 @@ export function PartyForm({ kind, onClose, onCreated }) {
   const lt = useLabelT();
   const { company, opt } = useCreateData(['countries']);
   const submit = useSubmit();
-  const [mode, setMode] = useState(kind === 'supplier' ? 'Supplier' : 'Customer');
+  const lockedSupplier = kind === 'sundry-creditor' || kind === 'supplier';
+  const lockedCustomer = kind === 'sundry-debtor' || kind === 'customer';
+  const typeLocked = lockedSupplier || lockedCustomer;
+  const [mode, setMode] = useState(lockedSupplier ? 'Supplier' : 'Customer');
+  useEffect(() => {
+    if (lockedSupplier) setMode('Supplier');
+    else if (lockedCustomer) setMode('Customer');
+  }, [lockedSupplier, lockedCustomer]);
   const [name, setName] = useState('');
   const [balance, setBalance] = useState('');
-  const [isCr, setIsCr] = useState(false);
+  const [isCr, setIsCr] = useState(lockedSupplier); // creditors typically Cr
   const [contact, setContact] = useState({ phone: '', email: '', website: '', address1: '', address2: '' });
   const [country, setCountry] = useState('India');
   const [state, setState] = useState('');
@@ -114,15 +123,21 @@ export function PartyForm({ kind, onClose, onCreated }) {
     }));
     if (result) onCreated?.(name.trim());
   };
-  if (submit.done) return <Done done={submit.done} title="Party" onClose={onClose} />;
+  if (submit.done) return <Done done={submit.done} title={mode === 'Supplier' ? 'Sundry Creditor' : 'Sundry Debtor'} onClose={onClose} />;
   const setC = (key, value) => setContact(x => ({ ...x, [key]: value }));
   const setV = (key, value) => setVatData(x => ({ ...x, [key]: value }));
   return (
     <div className="space-y-4">
       <FormError error={submit.error} testid="party-error" />
-      <FormSection title="Party details">
+      <FormSection title="Ledger details">
         <div className="space-y-3">
-          <Field label="Party type *"><Select value={mode} onChange={e => setMode(e.target.value)} data-testid="party-mode"><option>Customer</option><option>Supplier</option></Select></Field>
+          {typeLocked ? (
+            <p className="text-[13px] text-ink-soft" data-testid="party-type-locked">
+              {lt('Under')}: <span className="font-semibold text-ink">{mode === 'Supplier' ? lt('Sundry Creditors') : lt('Sundry Debtors')}</span>
+            </p>
+          ) : (
+            <Field label="Party type *"><Select value={mode} onChange={e => setMode(e.target.value)} data-testid="party-mode"><option>Customer</option><option>Supplier</option></Select></Field>
+          )}
           <Field label="Name *"><Input value={name} onChange={e => setName(e.target.value)} data-testid="party-name" /></Field>
           <BalanceFields prefix="party" balance={balance} setBalance={setBalance} isCr={isCr} setIsCr={setIsCr} />
         </div>
@@ -160,59 +175,68 @@ export function PartyForm({ kind, onClose, onCreated }) {
             </div>}
           </div>}
       </FormSection>}
-      <Button variant="primary" className="w-full" disabled={submit.saving} onClick={save} data-testid="party-submit">{submit.saving ? lt('Saving…') : lt('Create party')}</Button>
+      <Button variant="primary" className="w-full" disabled={submit.saving} onClick={save} data-testid="party-submit">{submit.saving ? lt('Saving…') : lt('Save ledger')}</Button>
     </div>
   );
 }
 
-export function LedgerForm({ onClose, onCreated }) {
+export function LedgerForm({ kind, onClose, onCreated }) {
   const lt = useLabelT();
   const { company } = useCreateData([]);
   const submit = useSubmit();
+  const isDuties = kind === 'duties-taxes';
   const [name, setName] = useState('');
-  const [group, setGroup] = useState('');
+  const [group, setGroup] = useState(isDuties ? DUTIES_GROUP : '');
   const [balance, setBalance] = useState('');
   const [isCr, setIsCr] = useState(false);
   const [bank, setBank] = useState({ accountNo: '', ifsc: '', branch: '', beneficiaryName: '', bankName: '' });
   const [duty, setDuty] = useState({ dutyCategory: '', taxType: '', percentage: '' });
   const [gst, setGst] = useState({ gstApplicable: '', taxability: '', hsnCode: '', rate: '', typeOfSupply: '' });
-  const bankGroup = group === 'Bank Accounts' || group === 'Bank OD A/c';
-  const gstGroup = GST_GROUPS.has(group);
-  const supplyRequired = gstGroup && !group.includes('Expenses');
+  const activeGroup = isDuties ? DUTIES_GROUP : group;
+  const bankGroup = activeGroup === 'Bank Accounts' || activeGroup === 'Bank OD A/c';
+  const gstGroup = GST_GROUPS.has(activeGroup);
+  const supplyRequired = gstGroup && !activeGroup.includes('Expenses');
   const changeGroup = g => { setGroup(g); setIsCr(CREDIT_GROUPS.has(g)); };
   const save = async () => {
     if (!name.trim()) return submit.setError('Name is required.');
-    if (!group) return submit.setError('Group is required.');
-    if (group === 'Duties & Taxes' && (!duty.dutyCategory || ((duty.dutyCategory === 'GST' || duty.dutyCategory === 'Others') && !duty.taxType))) return submit.setError('Complete the required duty and tax fields.');
+    if (!activeGroup) return submit.setError('Group is required.');
+    if (activeGroup === DUTIES_GROUP && (!duty.dutyCategory || ((duty.dutyCategory === 'GST' || duty.dutyCategory === 'Others') && !duty.taxType))) return submit.setError('Complete the required duty and tax fields.');
     if (gstGroup && (!gst.gstApplicable || (gst.gstApplicable === 'Applicable' && (!gst.taxability || (supplyRequired && !gst.typeOfSupply))))) return submit.setError('Complete the required GST profile fields.');
     const rate = gst.gstApplicable === 'Applicable' ? num(gst.rate) : 0;
     const cleanBank = Object.fromEntries(Object.entries(bank).map(([k, v]) => [k, v || undefined]));
+    const ledgerType = isDuties ? 'duties_taxes' : 'custom';
     const result = await submit.run(() => api.createPartyInTally({
-      companyGuid: company?.guid, companyName: company?.name || '', name: name.trim(), parent: group,
-      ledger_type: 'custom', isBillWise: 'No',
-      ...(!NO_BALANCE.has(group) ? { openingBalance: num(balance), isCr } : {}),
+      companyGuid: company?.guid, companyName: company?.name || '', name: name.trim(), parent: activeGroup,
+      ledger_type: ledgerType, isBillWise: 'No',
+      ...(!NO_BALANCE.has(activeGroup) ? { openingBalance: num(balance), isCr } : {}),
       ...(bankGroup ? { bankDetails: cleanBank } : {}),
-      ...(group === 'Duties & Taxes' ? { dutyCategory: duty.dutyCategory, taxType: duty.taxType || undefined, percentage: num(duty.percentage) } : {}),
+      ...(activeGroup === DUTIES_GROUP ? { dutyCategory: duty.dutyCategory, taxType: duty.taxType || undefined, percentage: num(duty.percentage) } : {}),
       ...(gstGroup ? {
         gstApplicable: gst.gstApplicable,
         taxability: gst.gstApplicable === 'Applicable' ? gst.taxability : '',
         hsnCode: gst.gstApplicable === 'Applicable' ? gst.hsnCode : '',
         igstRate: rate, cgstRate: rate / 2, sgstRate: rate / 2,
         ...(supplyRequired ? { typeOfSupply: gst.gstApplicable === 'Applicable' ? gst.typeOfSupply : '' } : {}),
-        ...((group === 'Sales Accounts' || group === 'Purchase Accounts') ? { inventoryValuesAffected: 'No' } : {}),
+        ...((activeGroup === 'Sales Accounts' || activeGroup === 'Purchase Accounts') ? { inventoryValuesAffected: 'No' } : {}),
       } : {}),
     }));
     if (result) onCreated?.();
   };
-  if (submit.done) return <Done done={submit.done} title="Ledger" onClose={onClose} />;
+  if (submit.done) return <Done done={submit.done} title={isDuties ? 'Duties and Taxes' : 'Custom Group'} onClose={onClose} />;
   const setB = (k, v) => setBank(x => ({ ...x, [k]: v }));
   return (
     <div className="space-y-4">
       <FormError error={submit.error} testid="ledger-error" />
       <FormSection title="Ledger details"><div className="space-y-3">
         <Field label="Name *"><Input value={name} onChange={e => setName(e.target.value)} data-testid="ledger-name" /></Field>
-        <Field label="Group *"><SearchSelect value={group} onChange={changeGroup} options={GROUPS} required translateOptions testid="ledger-group" /></Field>
-        {!NO_BALANCE.has(group) && <BalanceFields prefix="ledger" balance={balance} setBalance={setBalance} isCr={isCr} setIsCr={setIsCr} />}
+        {isDuties ? (
+          <p className="text-[13px] text-ink-soft" data-testid="ledger-group-locked">
+            {lt('Under')}: <span className="font-semibold text-ink">{lt(DUTIES_GROUP)}</span>
+          </p>
+        ) : (
+          <Field label="Group *"><SearchSelect value={group} onChange={changeGroup} options={GROUPS} required translateOptions testid="ledger-group" /></Field>
+        )}
+        {!NO_BALANCE.has(activeGroup) && <BalanceFields prefix="ledger" balance={balance} setBalance={setBalance} isCr={isCr} setIsCr={setIsCr} />}
       </div></FormSection>
       {bankGroup && <FormSection title="Bank details" defaultOpen={false}><div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
         {[
@@ -220,7 +244,7 @@ export function LedgerForm({ onClose, onCreated }) {
           ['beneficiaryName', 'Account holder name'], ['bankName', 'Bank name'],
         ].map(([k, label]) => <Field label={label} key={k}><Input value={bank[k]} onChange={e => setB(k, k === 'ifsc' ? e.target.value.toUpperCase() : e.target.value)} data-testid={`ledger-bank-${k}`} /></Field>)}
       </div></FormSection>}
-      {group === 'Duties & Taxes' && <FormSection title="Duty / Tax profile"><div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+      {activeGroup === DUTIES_GROUP && <FormSection title="Duty / Tax profile"><div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
         <Field label="Type of duty / tax *"><Select value={duty.dutyCategory} onChange={e => setDuty({ ...duty, dutyCategory: e.target.value, taxType: '' })} data-testid="ledger-duty-category"><option value="">Select</option>{['GST', 'CST', 'VAT', 'Others'].map(x => <option key={x}>{x}</option>)}</Select></Field>
         {(duty.dutyCategory === 'GST' || duty.dutyCategory === 'Others') && <Field label="Tax type *"><Select value={duty.taxType} onChange={e => setDuty({ ...duty, taxType: e.target.value })} data-testid="ledger-tax-type"><option value="">Select</option>{(duty.dutyCategory === 'GST' ? ['IGST', 'CGST', 'SGST/UTGST', 'Cess'] : ['VAT', 'Not Applicable']).map(x => <option key={x}>{x}</option>)}</Select></Field>}
         <Field label="% of calculation"><Input type="number" step="any" value={duty.percentage} onChange={e => setDuty({ ...duty, percentage: e.target.value })} data-testid="ledger-tax-percentage" /></Field>
@@ -234,7 +258,7 @@ export function LedgerForm({ onClose, onCreated }) {
           {supplyRequired && <Field label="Type of supply *"><Select value={gst.typeOfSupply} onChange={e => setGst({ ...gst, typeOfSupply: e.target.value })} data-testid="ledger-supply-type"><option value="">Select</option><option>Goods</option><option>Services</option></Select></Field>}
         </>}
       </div></FormSection>}
-      <Button variant="primary" className="w-full" disabled={submit.saving} onClick={save} data-testid="ledger-submit">{submit.saving ? lt('Saving…') : lt('Create ledger')}</Button>
+      <Button variant="primary" className="w-full" disabled={submit.saving} onClick={save} data-testid="ledger-submit">{submit.saving ? lt('Saving…') : lt('Save ledger')}</Button>
     </div>
   );
 }
@@ -281,7 +305,7 @@ export function StockItemForm({ onClose, onCreated }) {
       <ToggleRow label="Generate barcode" checked={barcode} onChange={setBarcode} testid="stock-item-generate-barcode" />
       {barcode && Object.entries(labels).map(([k, v]) => <ToggleRow key={k} label={{ itemName: 'Item name', sku: 'SKU', salePrice: 'Sale price' }[k]} checked={v} onChange={x => setLabels(l => ({ ...l, [k]: x }))} testid={`stock-item-label-${k}`} />)}
     </div></FormSection>
-    <Button variant="primary" className="w-full" disabled={submit.saving} onClick={save} data-testid="stock-item-submit">{submit.saving ? lt('Saving…') : lt('Create stock item')}</Button>
+    <Button variant="primary" className="w-full" disabled={submit.saving} onClick={save} data-testid="stock-item-submit">{submit.saving ? lt('Saving…') : lt('Add item')}</Button>
   </div>;
 }
 
@@ -308,7 +332,7 @@ export function WarehouseForm({ onClose, onCreated }) {
       <Field label="Parent godown"><SearchSelect value={parent} onChange={setParent} options={namesOf(opt.warehouses)} placeholder="None (top-level)" testid="warehouse-parent" /></Field>
       <Field label="Address"><Textarea value={address} onChange={e => setAddress(e.target.value)} data-testid="warehouse-address" /></Field>
     </div></FormSection>
-    <Button variant="primary" className="w-full" disabled={submit.saving} onClick={save} data-testid="warehouse-submit">{submit.saving ? lt('Saving…') : lt('Create warehouse')}</Button>
+    <Button variant="primary" className="w-full" disabled={submit.saving} onClick={save} data-testid="warehouse-submit">{submit.saving ? lt('Saving…') : lt('Add warehouse')}</Button>
   </div>;
 }
 

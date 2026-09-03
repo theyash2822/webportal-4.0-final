@@ -4,6 +4,28 @@ Format: Date | Task | Files Changed | Behavior Changed | Tested | Risks
 
 ---
 
+## 2026-09-03 | Create forms — mobile parity fixes (11-item backlog)
+Files changed: `src/App.jsx`, `src/components/create/CreateDrawer.jsx`, `src/components/create/common.jsx`, `src/components/create/voucherForms.jsx`, `src/components/create/accountingForms.jsx`, `src/services/api.js`
+- **Create Invoice** label (was Sales Invoice); regular/optional date lock on invoice, credit/debit note, delivery note, expense.
+- Item pick leaves rate blank (mobile rule).
+- **View document** — `/document/:id` route fixed (was nested under financials → 404 to dashboard); drawer closes then navigates to preview.
+- **Credit/Debit note** — load invoices via `/api/sales|purchase/invoices` (FY-scoped, deduped); item checkbox selection before return qty.
+- **Delivery note** — Order details + Dispatch details sections (mobile Order & Dispatch step fields).
+- **Payment/Receipt** — `unwrapList` now extracts `bills` from outstanding-bills API response.
+- **Expense** — entry type toggle, date lock, expense party ledgers merged, `isPaired` guard before submit.
+Tested: `vite build` OK.
+
+---
+
+## 2026-09-03 | Create menu — Ledger + Inventory mobile parity
+Files changed: `src/layouts/AppShell.jsx`, `src/components/create/CreateDrawer.jsx`, `src/components/create/masterForms.jsx`, `ROUTING_MAP.md`
+Create (+) menu: **Masters** → **Ledger** with Sundry Creditor, Sundry Debtor, Duties and Taxes, Custom Group (mobile ledger create tiles).
+**Inventory** menu: Add Item + Add Warehouse (stock transfer/adjustment removed from menu; forms remain available).
+PartyForm locks Under group for creditor/debtor; LedgerForm locks Duties & Taxes and uses custom group list without Duties (mobile parity).
+Tested: `vite build` OK.
+
+---
+
 ## 2026-09-02 | Dead-code cleanup — orphan modules + unused API wrappers
 Files changed: deleted ~37 orphan pages/components + 8 dead services/hooks; trimmed `src/services/api.js`; `AGENTS.md`, `API_USAGE.md`.
 Batch A: removed unreachable legacy pages (Parties/Ledgers/AIInsights/OTPScreen/old *Module.jsx/compliance/financials orphans) and components only they used (KPICard/Table/Drawer/PinModal/…).

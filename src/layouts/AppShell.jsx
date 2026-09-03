@@ -57,11 +57,11 @@ const NAV = [
 ];
 
 const CREATE_MENU = [
-  { label: 'Sales', items: [['Sales Invoice', 'sales-invoice'], ['Sales Order', 'sales-order'], ['Delivery Note', 'delivery-note'], ['Credit Note', 'credit-note'], ['Proforma', 'proforma'], ['Quotation', 'quotation']] },
+  { label: 'Sales', items: [['Create Invoice', 'sales-invoice'], ['Sales Order', 'sales-order'], ['Delivery Note', 'delivery-note'], ['Credit Note', 'credit-note'], ['Proforma', 'proforma'], ['Quotation', 'quotation']] },
   { label: 'Purchase', items: [['Purchase Invoice', 'purchase-invoice'], ['Purchase Order', 'purchase-order'], ['Debit Note', 'debit-note']] },
   { label: 'Voucher', items: [['Payment', 'payment'], ['Receipt', 'receipt'], ['Journal', 'journal'], ['Contra', 'contra'], ['Expense', 'expense']] },
-  { label: 'Masters', items: [['Party', 'party'], ['Ledger', 'ledger'], ['Stock Item', 'stock-item'], ['Warehouse', 'warehouse']] },
-  { label: 'Inventory', items: [['Stock Transfer', 'stock-transfer'], ['Stock Adjustment', 'stock-adjustment']] },
+  { label: 'Ledger', items: [['Sundry Creditor', 'sundry-creditor'], ['Sundry Debtor', 'sundry-debtor'], ['Duties and Taxes', 'duties-taxes'], ['Custom Group', 'custom-group']] },
+  { label: 'Inventory', items: [['Add Item', 'stock-item'], ['Add Warehouse', 'warehouse']] },
 ];
 
 const SEARCH_TARGETS = NAV.flatMap(g => g.items).concat([

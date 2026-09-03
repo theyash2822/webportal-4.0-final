@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState, useRef } from 'react';
 import { Field, Input, Select, Button, useLabelT } from '../kit';
 import api from '../../services/api';
+import { useAuth } from '../../contexts/AuthContext';
 import {
   num, todayISO, useCreateData, SearchSelect, FormSection,
   EntryTypeToggle, ToggleRow, LineItemsEditor, emptyLine, lineAmount,
@@ -79,11 +80,11 @@ function LoadingState({ loading, error, retry }) {
   return null;
 }
 
-function Success({ done, title, onClose, companyGuid }) {
+function Success({ done, title, onClose, companyGuid, onViewDocument }) {
   const lt = useLabelT();
   return (
     <>
-      <DoneState done={done} title={title} companyGuid={companyGuid} />
+      <DoneState done={done} title={title} companyGuid={companyGuid} onViewDocument={onViewDocument} />
       <Button variant="primary" className="w-full" onClick={onClose} data-testid="voucher-done">{lt('Done')}</Button>
     </>
   );
@@ -123,7 +124,7 @@ function PaymentFields({ prefix, enabled, setEnabled, value, setValue, banks, ve
  * screens use the same item, tax and logistics editors and differ only in a
  * small set of header/payment fields.
  */
-function CommercialForm({ mode, onClose, onCreated, prefill }) {
+function CommercialForm({ mode, onClose, onCreated, prefill, onViewDocument }) {
   const lt = useLabelT();
   const purchase = mode === 'purchase-invoice' || mode === 'purchase-order';
   const order = mode === 'sales-order' || mode === 'purchase-order';
@@ -136,7 +137,7 @@ function CommercialForm({ mode, onClose, onCreated, prefill }) {
     'purchase-invoice': 'pi', 'purchase-order': 'po',
   }[mode];
   const title = {
-    'sales-invoice': 'Sales invoice', proforma: 'Proforma invoice', 'sales-order': 'Sales order',
+    'sales-invoice': 'Create Invoice', proforma: 'Proforma invoice', 'sales-order': 'Sales order',
     'purchase-invoice': 'Purchase invoice', 'purchase-order': 'Purchase order',
   }[mode];
   const { loading, error: loadError, opt, company, retry } = useCreateData([
@@ -144,6 +145,7 @@ function CommercialForm({ mode, onClose, onCreated, prefill }) {
     'items', 'warehouses', purchase ? 'purchaseLedgers' : 'salesLedgers',
     'taxLedgers', 'chargeLedgers', ...(order || proforma ? [] : ['banks']),
   ]);
+  const { selectedFY } = useAuth();
   const submit = useSubmit();
   const [date, setDate] = useState((prefill?.date || '').slice(0, 10) || todayISO());
   const [party, setParty] = useState(prefill?.party || '');
@@ -184,6 +186,10 @@ function CommercialForm({ mode, onClose, onCreated, prefill }) {
     if (!saved) return;
     setDraftBanner(saved);
   }, [company?.guid, mode, prefix, prefill]);
+
+  useEffect(() => {
+    if (entryType === 'regular') setDate(todayISO());
+  }, [entryType]);
 
   useEffect(() => {
     if (!company?.guid || !DRAFT_MODES.has(mode)) return;
@@ -395,7 +401,7 @@ function CommercialForm({ mode, onClose, onCreated, prefill }) {
     }
   };
 
-  if (submit.done) return <Success done={submit.done} title={title} onClose={onClose} companyGuid={company?.guid} />;
+  if (submit.done) return <Success done={submit.done} title={title} onClose={onClose} companyGuid={company?.guid} onViewDocument={onViewDocument} />;
   if (loading || loadError) return <LoadingState loading={loading} error={loadError} retry={retry} />;
   const ledgerOptions = purchase ? opt.purchaseLedgers : opt.salesLedgers;
   const roundOffOptions = opt.roundOffLedgers?.length ? opt.roundOffLedgers : (opt.chargeLedgers || []);
@@ -423,8 +429,13 @@ function CommercialForm({ mode, onClose, onCreated, prefill }) {
       )}
       <FormSection title="Voucher details" sub={`${purchase ? 'Vendor' : 'Customer'}, date and accounting ledger`}>
         <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
-          <Field label={order ? 'Order date' : 'Date'}>
-            <Input type="date" value={date} onChange={e => setDate(e.target.value)} data-testid={`${prefix}-date`} />
+          {!proforma && !convertTdkRef && (
+            <EntryTypeToggle value={entryType} onChange={setEntryType} testid={`${prefix}-entry-type`} />
+          )}
+          <Field label={order ? 'Order date' : 'Date'} hint={!proforma && entryType === 'regular' ? 'Regular entries use today’s date.' : (!proforma ? 'Optional entries can be back-dated within the FY.' : undefined)}>
+            <Input type="date" value={date} disabled={!proforma && entryType === 'regular'} max={todayISO()}
+              min={!proforma && entryType === 'optional' ? selectedFY?.startDate : undefined}
+              onChange={e => setDate(e.target.value)} data-testid={`${prefix}-date`} />
           </Field>
           <Field label={purchase ? 'Vendor' : 'Customer'}>
             <div className="space-y-2">
@@ -464,7 +475,6 @@ function CommercialForm({ mode, onClose, onCreated, prefill }) {
               <Input value={againstOrderNo} onChange={e => setAgainstOrderNo(e.target.value)} data-testid={`${prefix}-against-order`} />
             </Field>
           )}
-          {!proforma && !convertTdkRef && <EntryTypeToggle value={entryType} onChange={setEntryType} testid={`${prefix}-entry-type`} />}
         </div>
       </FormSection>
 
@@ -581,6 +591,16 @@ const normalizeInvoices = raw => api.unwrapList(raw).map(row => {
   };
 }).filter(row => row.id && row.voucherNumber);
 
+const dedupeInvoices = rows => {
+  const seen = new Set();
+  return rows.filter(row => {
+    const key = String(row.guid || row.id || row.voucherNumber);
+    if (seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  });
+};
+
 const normalizeReturnContext = (raw, selected, ledgerKey) => {
   const body = raw?.data ?? raw ?? {};
   const invoice = body.invoice ?? body.originalInvoice ?? body.original_invoice ?? {};
@@ -600,18 +620,21 @@ const normalizeReturnContext = (raw, selected, ledgerKey) => {
       itemName: String(first(row.itemName, row.item_name, row.stockItem, row.stock_item_name, row.name, '') || ''),
       unit: String(first(row.unit, row.base_unit, '') || ''),
       soldQty, previouslyReturnedQty, remainingQty, rate,
-      returnQty: '',
+      returnQty: '', selected: false,
       ledger: String(first(row[ledgerKey], row[ledgerKey === 'salesLedger' ? 'sales_ledger' : 'purchase_ledger'], defaultLedger, '') || ''),
       godown: String(first(row.godown, row.warehouse, row.godown_name, 'Main Location') || ''),
     };
   }).filter(row => row.itemName);
 };
 
-function ReturnNoteForm({ type, onClose, onCreated }) {
+function ReturnNoteForm({ type, onClose, onCreated, onViewDocument }) {
   const lt = useLabelT();
   const credit = type === 'credit';
   const prefix = credit ? 'cn' : 'dn';
   const ledgerKey = credit ? 'salesLedger' : 'purchaseLedger';
+  const { selectedFY } = useAuth();
+  const fyStart = selectedFY?.startDate || `${new Date().getFullYear()}-04-01`;
+  const fyEnd = selectedFY?.endDate || `${new Date().getFullYear() + 1}-03-31`;
   const { loading, error: loadError, opt, company, retry } = useCreateData([
     'parties', 'warehouses', credit ? 'salesLedgers' : 'purchaseLedgers', 'taxLedgers',
   ]);
@@ -628,20 +651,30 @@ function ReturnNoteForm({ type, onClose, onCreated }) {
   const [taxes, setTaxes] = useState([]);
   const [narration, setNarration] = useState('');
   const [entryType, setEntryType] = useState('regular');
-  const subtotal = rows.reduce((sum, row) => sum + num(row.returnQty) * row.rate, 0);
+  const activeRows = rows.filter(r => r.selected && num(r.returnQty) > 0);
+  const subtotal = activeRows.reduce((sum, row) => sum + num(row.returnQty) * row.rate, 0);
   const total = subtotal + taxesTotal(taxes, subtotal);
+
+  useEffect(() => {
+    if (entryType === 'regular') setDate(todayISO());
+  }, [entryType]);
 
   useEffect(() => {
     setSelected(null); setRows([]); setInvoices([]); setInvoiceError('');
     if (!party || !company?.guid) return;
     let alive = true;
     setInvoiceLoading(true);
-    api.fetchVouchers({ companyGuid: company.guid, voucherType: credit ? 'Sales' : 'Purchase', partyName: party, page: 1, pageSize: 100 })
-      .then(res => alive && setInvoices(normalizeInvoices(res).filter(v => !v.party || v.party.toLowerCase() === party.toLowerCase())))
+    const fetchInvoices = credit ? api.fetchSalesInvoices : api.fetchPurchaseInvoices;
+    fetchInvoices(company.guid, { partyName: party, from: fyStart, to: fyEnd, limit: 500, pageSize: 500 })
+      .then(res => {
+        if (!alive) return;
+        const filtered = normalizeInvoices(res).filter(v => !v.party || v.party.toLowerCase() === party.toLowerCase());
+        setInvoices(dedupeInvoices(filtered));
+      })
       .catch(e => alive && setInvoiceError(e?.message || 'Unable to load original invoices.'))
       .finally(() => alive && setInvoiceLoading(false));
     return () => { alive = false; };
-  }, [party, company?.guid, credit]);
+  }, [party, company?.guid, credit, fyStart, fyEnd]);
 
   const chooseInvoice = async (name, choice) => {
     setSelected(choice); setRows([]); setInvoiceError('');
@@ -679,8 +712,8 @@ function ReturnNoteForm({ type, onClose, onCreated }) {
     if (!date) { submit.setError('Date is required.'); return; }
     if (!party) { submit.setError(`${credit ? 'Party' : 'Vendor'} is required.`); return; }
     if (!selected) { submit.setError(`Select the original ${credit ? 'Sales' : 'Purchase'} invoice.`); return; }
-    const picked = rows.filter(r => num(r.returnQty) > 0);
-    if (!picked.length) { submit.setError('Enter a return quantity for at least one item.'); return; }
+    const picked = rows.filter(r => r.selected && num(r.returnQty) > 0);
+    if (!picked.length) { submit.setError('Select at least one item and enter a return quantity.'); return; }
     for (const row of picked) {
       if (num(row.returnQty) > row.remainingQty) { submit.setError(`${row.itemName} exceeds its remaining quantity.`); return; }
       if (row.rate <= 0) { submit.setError(`Original rate is missing for ${row.itemName}.`); return; }
@@ -709,14 +742,19 @@ function ReturnNoteForm({ type, onClose, onCreated }) {
     if (result) onCreated?.();
   };
 
-  if (submit.done) return <Success done={submit.done} title={credit ? 'Credit note' : 'Debit note'} onClose={onClose} companyGuid={company?.guid} />;
+  if (submit.done) return <Success done={submit.done} title={credit ? 'Credit note' : 'Debit note'} onClose={onClose} companyGuid={company?.guid} onViewDocument={onViewDocument} />;
   if (loading || loadError) return <LoadingState loading={loading} error={loadError} retry={retry} />;
   const ledgerOptions = credit ? opt.salesLedgers : opt.purchaseLedgers;
   return (
     <div className="space-y-4">
       <FormSection title="Original invoice" sub="Choose the party and invoice being reversed">
         <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
-          <Field label="Date"><Input type="date" value={date} onChange={e => setDate(e.target.value)} data-testid={`${prefix}-date`} /></Field>
+          <EntryTypeToggle value={entryType} onChange={setEntryType} testid={`${prefix}-entry-type`} />
+          <Field label="Date" hint={entryType === 'regular' ? 'Regular entries use today’s date.' : 'Optional entries can be back-dated within the FY.'}>
+            <Input type="date" value={date} disabled={entryType === 'regular'} max={todayISO()}
+              min={entryType === 'optional' ? selectedFY?.startDate : undefined}
+              onChange={e => setDate(e.target.value)} data-testid={`${prefix}-date`} />
+          </Field>
           <Field label={credit ? 'Party' : 'Vendor'}>
             <SearchSelect value={party} required onChange={setParty} options={opt.parties || []} testid={`${prefix}-party`} placeholder="Select party…" />
           </Field>
@@ -726,31 +764,37 @@ function ReturnNoteForm({ type, onClose, onCreated }) {
               placeholder={invoiceLoading ? 'Loading invoices…' : 'Select invoice…'}
               subOf={o => [o.date, o.amount ? `₹${o.amount}` : ''].filter(Boolean).join(' · ')} />
           </Field>
-          <EntryTypeToggle value={entryType} onChange={setEntryType} testid={`${prefix}-entry-type`} />
         </div>
         {invoiceError && <div className="mt-3"><FormError error={invoiceError} testid={`${prefix}-invoice-error`} /></div>}
       </FormSection>
 
-      <FormSection title="Returned items" sub="Return quantity cannot exceed the remaining quantity">
+      <FormSection title="Returned items" sub="Select items to return — quantity cannot exceed remaining">
         {detailLoading ? <p className="text-[12px] text-ink-faint">{lt('Loading invoice lines…')}</p> : rows.length ? (
           <div className="space-y-3">
             {rows.map((row, i) => (
-              <div key={row.lineId || i} className="rounded-xl border border-line bg-cream p-3">
-                <div className="mb-3 flex items-start justify-between gap-3">
-                  <div><p className="text-[13px] font-semibold text-ink">{row.itemName}</p>
-                    <p className="text-[11px] text-ink-faint">{lt('Sold')} {row.soldQty} · {lt('Returned')} {row.previouslyReturnedQty} · {lt('Remaining')} {row.remainingQty} {row.unit}</p></div>
+              <div key={row.lineId || i} className={`rounded-xl border p-3 ${row.selected ? 'border-ink bg-cream' : 'border-line bg-cream/50'} ${row.remainingQty <= 0 ? 'opacity-60' : ''}`}>
+                <div className="mb-3 flex items-start gap-3">
+                  <input type="checkbox" className="mt-1" checked={!!row.selected} disabled={row.remainingQty <= 0}
+                    data-testid={`${prefix}-select-${i}`}
+                    onChange={e => updateRow(i, { selected: e.target.checked, returnQty: e.target.checked ? row.returnQty : '' })} />
+                  <div className="min-w-0 flex-1">
+                    <p className="text-[13px] font-semibold text-ink">{row.itemName}</p>
+                    <p className="text-[11px] text-ink-faint">{lt('Sold')} {row.soldQty} · {lt('Returned')} {row.previouslyReturnedQty} · {lt('Remaining')} {row.remainingQty} {row.unit}</p>
+                  </div>
                   <p className="text-[12px] font-medium text-ink">₹{row.rate.toFixed(2)}</p>
                 </div>
-                <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
-                  <Field label="Return quantity"><Input type="number" min="0" max={row.remainingQty} step="any" value={row.returnQty}
-                    onChange={e => updateRow(i, { returnQty: e.target.value })} data-testid={`${prefix}-return-qty-${i}`} /></Field>
-                  <Field label={`${credit ? 'Sales' : 'Purchase'} ledger`}>
-                    <SearchSelect value={row.ledger} required onChange={ledger => updateRow(i, { ledger })}
-                      options={ledgerOptions || []} testid={`${prefix}-line-ledger-${i}`} placeholder="Select ledger…" />
-                  </Field>
-                  <Field label="Warehouse"><SearchSelect value={row.godown} required onChange={godown => updateRow(i, { godown })}
-                    options={opt.warehouses || []} testid={`${prefix}-line-godown-${i}`} placeholder="Select warehouse…" /></Field>
-                </div>
+                {row.selected && (
+                  <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
+                    <Field label="Return quantity"><Input type="number" min="0" max={row.remainingQty} step="any" value={row.returnQty}
+                      onChange={e => updateRow(i, { returnQty: e.target.value })} data-testid={`${prefix}-return-qty-${i}`} /></Field>
+                    <Field label={`${credit ? 'Sales' : 'Purchase'} ledger`}>
+                      <SearchSelect value={row.ledger} required onChange={ledger => updateRow(i, { ledger })}
+                        options={ledgerOptions || []} testid={`${prefix}-line-ledger-${i}`} placeholder="Select ledger…" />
+                    </Field>
+                    <Field label="Warehouse"><SearchSelect value={row.godown} required onChange={godown => updateRow(i, { godown })}
+                      options={opt.warehouses || []} testid={`${prefix}-line-godown-${i}`} placeholder="Select warehouse…" /></Field>
+                  </div>
+                )}
               </div>
             ))}
           </div>
@@ -776,9 +820,10 @@ function ReturnNoteForm({ type, onClose, onCreated }) {
 export function CreditNoteForm(props) { return <ReturnNoteForm {...props} type="credit" />; }
 export function DebitNoteForm(props) { return <ReturnNoteForm {...props} type="debit" />; }
 
-export function DeliveryNoteForm({ onClose, onCreated }) {
+export function DeliveryNoteForm({ onClose, onCreated, onViewDocument }) {
   const lt = useLabelT();
   const prefix = 'dn-delivery';
+  const { selectedFY } = useAuth();
   const { loading, error: loadError, opt, company, retry } = useCreateData([
     'parties', 'items', 'warehouses', 'salesLedgers', 'taxLedgers', 'chargeLedgers',
   ]);
@@ -792,19 +837,31 @@ export function DeliveryNoteForm({ onClose, onCreated }) {
   const [lines, setLines] = useState([emptyLine()]);
   const [taxes, setTaxes] = useState([]);
   const [charges, setCharges] = useState([]);
-  const [dispatch, setDispatch] = useState(emptyDispatch());
-  const [showDispatch, setShowDispatch] = useState(false);
+  const [modeOfPayment, setModeOfPayment] = useState('');
+  const [otherReferences, setOtherReferences] = useState('');
+  const [termsOfDelivery, setTermsOfDelivery] = useState('');
+  const [dispatchDocNo, setDispatchDocNo] = useState('');
+  const [dispatchedThrough, setDispatchedThrough] = useState('');
+  const [shipToDestination, setShipToDestination] = useState('');
+  const [carrierName, setCarrierName] = useState('');
+  const [billOfLadingNo, setBillOfLadingNo] = useState('');
+  const [lrDate, setLrDate] = useState('');
+  const [vehicleNumber, setVehicleNumber] = useState('');
   const [narration, setNarration] = useState('');
   const [entryType, setEntryType] = useState('regular');
   const taxable = lines.reduce((sum, l) => sum + (l.name ? lineAmount(l) : 0), 0);
   const total = taxable + taxesTotal(taxes, taxable) + chargesTotal(charges);
 
   useEffect(() => {
+    if (entryType === 'regular') setDate(todayISO());
+  }, [entryType]);
+
+  useEffect(() => {
     setOrders([]); setLinkedOrder(null);
     if (!party || !company?.guid) return;
     let alive = true;
     api.fetchSalesOrders(company.guid, { partyName: party, limit: 100 })
-      .then(res => alive && setOrders(normalizeInvoices(res).filter(v => !v.party || v.party.toLowerCase() === party.toLowerCase())))
+      .then(res => alive && setOrders(dedupeInvoices(normalizeInvoices(res).filter(v => !v.party || v.party.toLowerCase() === party.toLowerCase()))))
       .catch(() => alive && setOrders([]));
     return () => { alive = false; };
   }, [party, company?.guid]);
@@ -820,6 +877,8 @@ export function DeliveryNoteForm({ onClose, onCreated }) {
       if (num(line.rate) <= 0) { submit.setError(`Enter a rate for ${line.name}.`); return; }
       if (!line.godown) { submit.setError(`Select a warehouse for ${line.name}.`); return; }
     }
+    const hasDispatch = !!(modeOfPayment || otherReferences || termsOfDelivery || dispatchDocNo
+      || dispatchedThrough || shipToDestination || carrierName || billOfLadingNo || lrDate || vehicleNumber);
     const body = {
       companyGuid: company.guid, companyName: company.name, partyLedger: party, date,
       totalAmount: total,
@@ -827,25 +886,62 @@ export function DeliveryNoteForm({ onClose, onCreated }) {
       taxes: taxesPayload(taxes, taxable), logistics: chargesPayload(charges),
       narration: narration || undefined, isOptional: entryType === 'optional',
       original_entry_type: entryType, numbering_policy: numberingPolicy,
-      dispatch_details: showDispatch ? dispatchPayload(dispatch) : undefined,
+      dispatch_details: hasDispatch ? {
+        mode_of_payment: modeOfPayment || undefined,
+        other_references: otherReferences || undefined,
+        terms_of_delivery: termsOfDelivery || undefined,
+        transport_doc_no: dispatchDocNo || undefined,
+        dispatched_through: dispatchedThrough || undefined,
+        ship_to: shipToDestination || undefined,
+        carrier_name: carrierName || undefined,
+        bill_of_lading_no: billOfLadingNo || undefined,
+        lr_date: lrDate || undefined,
+        vehicle_number: vehicleNumber || undefined,
+      } : undefined,
       linked_order: linkedOrder ? { order_no: linkedOrder.voucherNumber, order_date: linkedOrder.date } : undefined,
     };
     const result = await submit.run(() => api.createDeliveryNote(body));
     if (result) onCreated?.();
   };
 
-  if (submit.done) return <Success done={submit.done} title="Delivery note" onClose={onClose} companyGuid={company?.guid} />;
+  if (submit.done) return <Success done={submit.done} title="Delivery note" onClose={onClose} companyGuid={company?.guid} onViewDocument={onViewDocument} />;
   if (loading || loadError) return <LoadingState loading={loading} error={loadError} retry={retry} />;
   return (
     <div className="space-y-4">
-      <FormSection title="Delivery details" sub="Customer and optional linked sales order">
+      <FormSection title="Delivery details" sub="Customer, date and sales ledger">
         <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
-          <Field label="Date"><Input type="date" value={date} onChange={e => setDate(e.target.value)} data-testid={`${prefix}-date`} /></Field>
-          <Field label="Customer"><SearchSelect value={party} required onChange={setParty} options={opt.parties || []} testid={`${prefix}-party`} placeholder="Select customer…" /></Field>
-          {party && <Field label="Linked sales order"><SearchSelect value={linkedOrder?.voucherNumber || ''}
-            onChange={(name, row) => setLinkedOrder(row || null)} options={orders} testid={`${prefix}-order`} placeholder="No linked sales order" subOf={o => o.date} /></Field>}
-          <Field label="Sales ledger"><SearchSelect value={ledger} required onChange={setLedger} options={opt.salesLedgers || []} testid={`${prefix}-ledger`} placeholder="Select ledger…" /></Field>
           <EntryTypeToggle value={entryType} onChange={setEntryType} testid={`${prefix}-entry-type`} />
+          <Field label="Date" hint={entryType === 'regular' ? 'Regular entries use today’s date.' : 'Optional entries can be back-dated within the FY.'}>
+            <Input type="date" value={date} disabled={entryType === 'regular'} max={todayISO()}
+              min={entryType === 'optional' ? selectedFY?.startDate : undefined}
+              onChange={e => setDate(e.target.value)} data-testid={`${prefix}-date`} />
+          </Field>
+          <Field label="Customer"><SearchSelect value={party} required onChange={setParty} options={opt.parties || []} testid={`${prefix}-party`} placeholder="Select customer…" /></Field>
+          <Field label="Sales ledger"><SearchSelect value={ledger} required onChange={setLedger} options={opt.salesLedgers || []} testid={`${prefix}-ledger`} placeholder="Select ledger…" /></Field>
+          {party && <Field label="Linked sales order" className="sm:col-span-2"><SearchSelect value={linkedOrder?.voucherNumber || ''}
+            onChange={(name, row) => setLinkedOrder(row || null)} options={orders} testid={`${prefix}-order`} placeholder="No linked sales order" subOf={o => o.date} /></Field>}
+        </div>
+      </FormSection>
+      <FormSection title="Order details" sub="Payment terms and references (matches mobile Order & Dispatch step)">
+        <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+          <Field label="Order no." className="sm:col-span-2">
+            <Input readOnly value={linkedOrder ? `#${linkedOrder.voucherNumber}${linkedOrder.date ? ` · ${linkedOrder.date}` : ''}` : 'No linked sales order'}
+              data-testid={`${prefix}-order-no-readonly`} className="bg-cream/60" />
+          </Field>
+          <Field label="Mode/Terms of payment"><Input value={modeOfPayment} onChange={e => setModeOfPayment(e.target.value)} placeholder="e.g. Against Delivery / 30 Days" data-testid={`${prefix}-mode-of-payment`} /></Field>
+          <Field label="Other references"><Input value={otherReferences} onChange={e => setOtherReferences(e.target.value)} placeholder="Customer PO / other ref" data-testid={`${prefix}-other-references`} /></Field>
+          <Field label="Terms of delivery" className="sm:col-span-2"><Input value={termsOfDelivery} onChange={e => setTermsOfDelivery(e.target.value)} placeholder="e.g. FOR Destination" data-testid={`${prefix}-terms-of-delivery`} /></Field>
+        </div>
+      </FormSection>
+      <FormSection title="Dispatch details" sub="Transport and destination (matches mobile Order & Dispatch step)">
+        <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+          <Field label="Dispatch doc no."><Input value={dispatchDocNo} onChange={e => setDispatchDocNo(e.target.value)} data-testid={`${prefix}-dispatch-doc-no`} /></Field>
+          <Field label="Dispatched through"><Input value={dispatchedThrough} onChange={e => setDispatchedThrough(e.target.value)} placeholder="e.g. Road / Courier name" data-testid={`${prefix}-dispatched-through`} /></Field>
+          <Field label="Destination"><Input value={shipToDestination} onChange={e => setShipToDestination(e.target.value)} placeholder="City / place of delivery" data-testid={`${prefix}-ship-to`} /></Field>
+          <Field label="Carrier name/agent"><Input value={carrierName} onChange={e => setCarrierName(e.target.value)} data-testid={`${prefix}-carrier-name`} /></Field>
+          <Field label="Bill of lading no."><Input value={billOfLadingNo} onChange={e => setBillOfLadingNo(e.target.value)} data-testid={`${prefix}-bill-of-lading`} /></Field>
+          <Field label="LR date"><Input type="date" value={lrDate} onChange={e => setLrDate(e.target.value)} data-testid={`${prefix}-lr-date`} /></Field>
+          <Field label="Vehicle number"><Input value={vehicleNumber} onChange={e => setVehicleNumber(e.target.value)} data-testid={`${prefix}-vehicle-number`} /></Field>
         </div>
       </FormSection>
       <FormSection title="Items"><LineItemsEditor lines={lines} setLines={setLines} items={opt.items} warehouses={opt.warehouses}
@@ -853,10 +949,6 @@ export function DeliveryNoteForm({ onClose, onCreated }) {
       <FormSection title="Taxes"><TaxRowsEditor taxes={taxes} setTaxes={setTaxes} taxLedgers={opt.taxLedgers} taxableValue={taxable} testid={`${prefix}-taxes`} /></FormSection>
       <FormSection title="Logistics charges" defaultOpen={false}><ChargesEditor charges={charges} setCharges={setCharges}
         chargeLedgers={opt.chargeLedgers} taxLedgers={opt.taxLedgers} testid={`${prefix}-charges`} /></FormSection>
-      <FormSection title="Dispatch" sub="Transport and destination details" defaultOpen={false}>
-        <ToggleRow label="Add dispatch details" checked={showDispatch} onChange={setShowDispatch} testid={`${prefix}-dispatch-toggle`} />
-        {showDispatch && <div className="mt-4"><DispatchSection value={dispatch} onChange={setDispatch} testid={`${prefix}-dispatch`} /></div>}
-      </FormSection>
       <FormSection title="Delivery instructions" defaultOpen={false}><Field label="Narration / instructions">
         <Input value={narration} onChange={e => setNarration(e.target.value)} data-testid={`${prefix}-narration`} />
       </Field></FormSection>

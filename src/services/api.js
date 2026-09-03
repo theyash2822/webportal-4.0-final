@@ -91,7 +91,7 @@ export function unwrapList(res) {
   const d = res.data ?? res.result ?? res;
   if (Array.isArray(d)) return d;
   if (!d || typeof d !== 'object') return [];
-  for (const key of ['items', 'rows', 'vouchers', 'entries', 'parties', 'warehouses', 'ledgers', 'stocks', 'list', 'data']) {
+  for (const key of ['items', 'rows', 'vouchers', 'entries', 'parties', 'warehouses', 'ledgers', 'stocks', 'bills', 'list', 'data']) {
     if (Array.isArray(d[key])) return d[key];
   }
   return [];

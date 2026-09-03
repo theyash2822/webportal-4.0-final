@@ -22,6 +22,7 @@ export const inr = v => `₹${num(v).toLocaleString('en-IN', { minimumFractionDi
 const LOADERS = {
   parties:         g => api.fetchParties({ companyGuid: g, pageSize: 500 }),
   partiesVendor:   g => api.fetchParties({ companyGuid: g, pageSize: 500, type: 'vendor' }),
+  partiesExpense:  g => api.fetchParties({ companyGuid: g, pageSize: 500, type: 'expense' }),
   ledgers:         g => api.fetchLedgers({ companyGuid: g, pageSize: 500 }),
   items:           async g => {
     let fyKey = 'fy';
@@ -279,7 +280,8 @@ export function LineItemsEditor({
   const pickItem = async (i, name) => {
     const it = itemByName[name] || {};
     const lineId = lines[i]?._id;
-    update(i, { name, unit: it.unit || it.base_unit || '', rate: it.sale_price || it.rate || it.closing_rate || '', godown: '', _godowns: null });
+    // Mobile leaves rate blank on item pick (user enters rate); only unit is prefilled.
+    update(i, { name, unit: it.unit || it.base_unit || '', rate: '', godown: '', _godowns: null });
     // Per-item godowns only — never fall back to the global warehouse list (mobile rule).
     try {
       const stockId = it.guid || it.stock_guid || it.id || name;

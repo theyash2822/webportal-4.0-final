@@ -74,7 +74,10 @@ Source: `src/App.jsx` (Web Portal 3.0 routes, Vite)
 ## Create drawer (AppShell)
 | Kind | Component File |
 |------|----------------|
-| All voucher / master create forms | src/components/create/*.jsx via CreateDrawer |
+| Sales / Purchase / Voucher creates | src/components/create/voucherForms.jsx + accountingForms.jsx |
+| Ledger: sundry-creditor, sundry-debtor, duties-taxes, custom-group | src/components/create/masterForms.jsx (PartyForm / LedgerForm) |
+| Inventory: stock-item (Add Item), warehouse (Add Warehouse) | src/components/create/masterForms.jsx |
+| Stock transfer / adjustment | Still in CreateDrawer forms map; opened from inventory flows if needed |
 
 ## Layout Components
 | Component | File | Purpose |

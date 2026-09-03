@@ -157,10 +157,12 @@ export default function App() {
                     <Route path="receivables-payables" element={<Navigate to="/kpi/receivables" replace />} />
                     <Route path="loans-ods" element={<Navigate to="/kpi/loans-ods" replace />} />
                     <Route path="cashflow" element={<Navigate to="/cashflow-report" replace />} />
-                    <Route path="cashflow-report" element={<CashflowReport />} />
-                    <Route path="document/:id" element={<DocumentViewer />} />
                     <Route path="reports/*" element={<Navigate to="/financials/overview" replace />} />
                   </Route>
+
+                  {/* Top-level — DoneState uses /document/:id; cashflow links use /cashflow-report */}
+                  <Route path="document/:id" element={<DocumentViewer />} />
+                  <Route path="cashflow-report" element={<CashflowReport />} />
 
                   <Route path="compliance" element={<ModuleLayout title="Compliance" tabs={COMPLIANCE_TABS} Kpis={C.ComplianceKpis} />}>
                     <Route index element={<Navigate to="/compliance/gst" replace />} />

@@ -55,11 +55,11 @@ function LoadingError({ loading, error, retry }) {
   );
 }
 
-function Complete({ done, title, onClose, testid }) {
+function Complete({ done, title, onClose, testid, companyGuid, onViewDocument }) {
   const lt = useLabelT();
   return (
     <>
-      <DoneState done={done} title={title} />
+      <DoneState done={done} title={title} companyGuid={companyGuid} onViewDocument={onViewDocument} />
       <Button variant="primary" className="w-full" onClick={onClose} data-testid={testid}>{lt('Done')}</Button>
     </>
   );
@@ -86,7 +86,7 @@ function MethodPills({ value, onChange, prefix }) {
   );
 }
 
-function MoneyVoucherForm({ direction, onClose, onCreated }) {
+function MoneyVoucherForm({ direction, onClose, onCreated, onViewDocument }) {
   const lt = useLabelT();
   const isPayment = direction === 'payment';
   const prefix = isPayment ? 'payment' : 'receipt';
@@ -185,7 +185,7 @@ function MoneyVoucherForm({ direction, onClose, onCreated }) {
     if (result) onCreated?.();
   };
 
-  if (done) return <Complete done={done} title={title} onClose={onClose} testid={`${prefix}-done`} />;
+  if (done) return <Complete done={done} title={title} onClose={onClose} testid={`${prefix}-done`} companyGuid={company?.guid} onViewDocument={onViewDocument} />;
   if (loading || loadError) return <LoadingError loading={loading} error={loadError} retry={retry} />;
 
   return (
@@ -579,21 +579,37 @@ export function ContraForm({ onClose, onCreated }) {
   );
 }
 
-export function ExpenseForm({ onClose, onCreated }) {
+export function ExpenseForm({ onClose, onCreated, onViewDocument }) {
   const lt = useLabelT();
-  const { loading, error: loadError, opt, company, retry } = useCreateData(['ledgers', 'banks']);
+  const { isPaired, selectedFY } = useAuth();
+  const { loading, error: loadError, opt, company, retry } = useCreateData(['ledgers', 'banks', 'partiesExpense']);
   const numberingPolicy = useNumberingPolicy(company?.guid);
   const { saving, error, setError, done, run } = useSubmit();
+  const [entryType, setEntryType] = useState('regular');
   const [expenseLedger, setExpenseLedger] = useState('');
   const [paidFrom, setPaidFrom] = useState('');
   const [amount, setAmount] = useState('');
   const [date, setDate] = useState(todayISO());
   const [narration, setNarration] = useState('');
-  const expenses = (opt.ledgers || []).filter(row => containsParent(row, 'Expense'));
+  const expenses = useMemo(() => {
+    const byName = new Map();
+    const add = row => {
+      const name = rowName(row);
+      if (name) byName.set(name, row);
+    };
+    (opt.ledgers || []).filter(row => containsParent(row, 'Expense')).forEach(add);
+    (opt.partiesExpense || []).forEach(add);
+    return [...byName.values()].sort((a, b) => rowName(a).localeCompare(rowName(b)));
+  }, [opt.ledgers, opt.partiesExpense]);
   const banks = opt.banks || [];
   const bankByName = useMemo(() => Object.fromEntries(banks.map(row => [rowName(row), row])), [banks]);
 
+  useEffect(() => {
+    if (entryType === 'regular') setDate(todayISO());
+  }, [entryType]);
+
   const submit = async () => {
+    if (!isPaired) return setError('Pair with Tally Desktop first.');
     if (!expenseLedger) return setError('Expense ledger is required.');
     if (!paidFrom) return setError('Paid-from ledger is required.');
     if (!date) return setError('Date is required.');
@@ -608,7 +624,7 @@ export function ExpenseForm({ onClose, onCreated }) {
       ledgerAccount: paidFrom,
       paymentMethod,
       billAllocations: [],
-      entryType: 'regular',
+      entryType,
       numbering_policy: numberingPolicy,
       narration: narration.trim() || undefined,
     };
@@ -616,7 +632,7 @@ export function ExpenseForm({ onClose, onCreated }) {
     if (result) onCreated?.();
   };
 
-  if (done) return <Complete done={done} title="Expense" onClose={onClose} testid="expense-done" />;
+  if (done) return <Complete done={done} title="Expense" onClose={onClose} testid="expense-done" companyGuid={company?.guid} onViewDocument={onViewDocument} />;
   if (loading || loadError) return <LoadingError loading={loading} error={loadError} retry={retry} />;
 
   return (
@@ -626,6 +642,12 @@ export function ExpenseForm({ onClose, onCreated }) {
       </p>
       <FormSection title="Expense details" sub="Simple payment preset" testid="expense-essentials">
         <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
+          <EntryTypeToggle value={entryType} onChange={setEntryType} testid="expense-entry-type" />
+          <Field label="Date *" hint={entryType === 'regular' ? 'Regular vouchers use today’s date.' : undefined}>
+            <Input type="date" value={date} disabled={entryType === 'regular'} max={todayISO()}
+              min={entryType === 'optional' ? selectedFY?.startDate : undefined}
+              onChange={e => setDate(e.target.value)} data-testid="expense-date" />
+          </Field>
           <Field label="Expense ledger *" className="sm:col-span-2">
             <SearchSelect value={expenseLedger} onChange={setExpenseLedger} options={expenses} required subOf={parentOf}
               placeholder="Select expense ledger…" testid="expense-ledger" />
@@ -637,9 +659,6 @@ export function ExpenseForm({ onClose, onCreated }) {
           <Field label="Amount (₹) *">
             <Input type="number" min="0" step="any" value={amount} onChange={e => setAmount(e.target.value)}
               data-testid="expense-amount" />
-          </Field>
-          <Field label="Date *">
-            <Input type="date" value={date} onChange={e => setDate(e.target.value)} data-testid="expense-date" />
           </Field>
           <Field label="Narration" className="sm:col-span-2">
             <Textarea value={narration} onChange={e => setNarration(e.target.value)} data-testid="expense-narration" />
