@@ -4,6 +4,67 @@ Format: Date | Task | Files Changed | Behavior Changed | Tested | Risks
 
 ---
 
+## 2026-09-08 | TallyDekho Thermal PDF (replaces Ledger) — mobile parity
+Files changed: `src/utils/thermalShared.js`, `src/utils/thermalPrint.js`, `src/utils/voucherConfig.js`, `src/utils/voucherPdfBuild.js`, `src/utils/invoicePrint.js`, `src/components/settings/VoucherConfigPanel.jsx`, `src/pages/shared.jsx`, `src/pages/DocumentViewer.jsx`
+- Settings formats: **Classic · Thermal · Executive** (Ledger/`td_ledger_v1`/`modern_a` migrate → Thermal).
+- Thermal paper width **80mm / 58mm** (auto-saved); cream on-screen sheet unchanged.
+- Share PDF / Print PDF use mobile-style thermal HTML (dashes, narrow columns) when Thermal is selected; A4 Classic/Executive otherwise.
+Tested: `vite build` OK; thermal HTML unit checks for 80/58 + purchase/payment.
+
+---
+
+## 2026-09-07 | Fix Settings PDF layout not applied on Share/Print
+Files changed: `src/utils/invoicePrint.js`, `src/utils/voucherConfig.js`, `src/utils/voucherPdfBuild.js`, `src/components/settings/VoucherConfigPanel.jsx`
+- **Root causes:** (1) format card only updated local UI until Save — Share always loaded server defaults (often empty → Classic); (2) Classic/Executive were near-identical color swaps so PDFs looked the same.
+- Format card **auto-saves** to server + `localStorage`; Share/Print resolve via `resolveVoucherConfigSource` (server + local overlay).
+- PDF chrome is now **structurally different** per format (Classic ribbon / Ledger navy banner / Executive cream shell) + footer `Layout:` tag.
+- Config lookup prefers list-row `voucher_type` for the correct per-type settings key.
+Tested: format HTML unit check + `vite build`.
+
+---
+
+## 2026-09-07 | Remove voucher Preview button (Print PDF is enough)
+Files changed: `src/pages/shared.jsx`, `src/pages/DocumentViewer.jsx`
+- Dropped **Preview** + inline PDF overlay from voucher drawer and `/document/:id`.
+- Footer actions now: **Share PDF** · **Print PDF** (cream sheet remains the on-screen view).
+Tested: visual/code review.
+
+---
+
+## 2026-09-07 | Voucher Configuration UI — mobile parity
+Files changed: `src/components/settings/VoucherConfigPanel.jsx`, `src/utils/voucherConfig.js`, `src/utils/voucherPdfBuild.js`
+- Settings **Voucher Configuration** now matches mobile layout: numbering + E-Invoice + E-Way Bill radios, accordion per voucher type, format thumbnail cards (Classic / Ledger / Executive), default bank, QR upload + type chips, terms, **PDF Preview** overlay, **Use this format**, dirty **Save All**.
+- Labels/defaults aligned (Payment/Receipt/… Voucher; terms only on commercial types; bankInfo matches mobile Cash/QR rules).
+Tested: `vite build` OK.
+
+---
+
+## 2026-09-07 | Fix voucher PDF Preview (inline) + Share PDF (.pdf)
+Files changed: `src/utils/invoicePrint.js`, `src/components/PdfHtmlPreviewOverlay.jsx`, `src/pages/shared.jsx`, `src/pages/DocumentViewer.jsx`, `src/utils/voucherPdfBuild.js`
+- **Preview** opens an in-app overlay iframe (`srcDoc`) — no `window.open` / popup blocker.
+- **Share PDF** renders settings HTML → real PDF blob (html2canvas + jsPDF), then Web Share API or `.pdf` download (no `.html` file, no WhatsApp popup).
+Tested: `vite build` OK; browser smoke — `htmlToPdfBlob` returns `%PDF-` blob (~45KB); inline overlay mounts without `window.open`. Full voucher-drawer click path needs your logged-in session (session inject declined).
+
+---
+
+## 2026-09-07 | Voucher cream drawer + Settings PDF layouts
+Files changed: `src/pages/shared.jsx`, `src/pages/DocumentViewer.jsx`, `src/components/CreamDocumentSheet.jsx`, `src/utils/creamPreviewModel.js`, `src/utils/voucherPdfBuild.js`, `src/utils/voucherConfig.js`, `src/utils/invoicePrint.js`, `src/components/settings/VoucherConfigPanel.jsx`, `ROUTING_MAP.md`
+- List click opens side drawer with **cream** on-screen sheet (mobile print-sheet look; not Settings-driven).
+- Footer actions only: **Preview** (settings-layout PDF inline overlay), **Share PDF** (real `.pdf` + optional Tally share-pdf), **Print PDF**. Cancel voucher removed from this drawer.
+- Settings PDF formats aligned with mobile: Tally Classic / TallyDekho Ledger / TallyDekho Executive (`tally_classic_v1` | `td_ledger_v1` | `td_executive_v1`; legacy ids aliased).
+- Post-create `/document/:id` uses the same cream sheet + 3 PDF buttons (X/back close).
+Tested: `vite build` OK.
+
+---
+
+## 2026-09-03 | Restore Inventory create: Transfer / Adjustment / Edit
+Files changed: `src/layouts/AppShell.jsx`, `src/components/create/CreateDrawer.jsx`, `src/components/create/masterForms.jsx`, `ROUTING_MAP.md`
+Create (+) **Inventory** menu again includes Stock Transfer, Stock Adjustment, and Stock Edit (plus Add Item / Add Warehouse).
+Stock Edit is a create-drawer form: pick an existing item, alter HSN / alias / GST / group / reorder, POST `/tally/master/stock-item-alter`.
+Tested: `vite build` after change.
+
+---
+
 ## 2026-09-03 | Create forms — mobile parity fixes (11-item backlog)
 Files changed: `src/App.jsx`, `src/components/create/CreateDrawer.jsx`, `src/components/create/common.jsx`, `src/components/create/voucherForms.jsx`, `src/components/create/accountingForms.jsx`, `src/services/api.js`
 - **Create Invoice** label (was Sales Invoice); regular/optional date lock on invoice, credit/debit note, delivery note, expense.

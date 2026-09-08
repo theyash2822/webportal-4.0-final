@@ -336,6 +336,112 @@ export function WarehouseForm({ onClose, onCreated }) {
   </div>;
 }
 
+const GST_RATES = ['0', '5', '12', '18', '28'];
+
+export function StockEditForm({ onClose, onCreated, prefill }) {
+  const lt = useLabelT();
+  const { company, opt } = useCreateData(['items', 'stockGroups']);
+  const submit = useSubmit();
+  const [itemName, setItemName] = useState(prefill?.name || '');
+  const [item, setItem] = useState(null);
+  const [hsn, setHsn] = useState('');
+  const [alias, setAlias] = useState('');
+  const [gstRate, setGstRate] = useState('');
+  const [group, setGroup] = useState('');
+  const [reorder, setReorder] = useState('');
+  const [note, setNote] = useState('');
+
+  const pickItem = (name, row) => {
+    const next = row || (opt.items || []).find(x => x.name === name) || null;
+    setItemName(name);
+    setItem(next);
+    setHsn(next?.hsn || next?.sku || '');
+    setAlias(next?.alias || '');
+    const rate = next?.gst_rate ?? next?.igstRate ?? next?.taxRate;
+    setGstRate(rate === 0 || rate ? String(rate) : '');
+    setGroup(next?.group || next?.group_name || next?.category || '');
+    setReorder(next?.reorder_level != null ? String(next.reorder_level) : '');
+    setNote('');
+  };
+
+  useEffect(() => {
+    if (prefill?.name && opt.items?.length && !item) {
+      const row = opt.items.find(x => x.name === prefill.name || x.guid === prefill.guid);
+      if (row) pickItem(row.name, row);
+    }
+  }, [prefill, opt.items, item]);
+
+  const save = async () => {
+    if (!item) return submit.setError('Select a stock item to edit.');
+    const rate = gstRate === '' ? null : num(gstRate);
+    const changes = {};
+    if (hsn.trim() && hsn.trim() !== (item.hsn || item.sku || '')) changes.hsnCode = hsn.trim();
+    if (alias.trim() && alias.trim() !== (item.alias || '')) changes.alias = alias.trim();
+    if (group && group !== (item.group || item.group_name || item.category || '')) changes.groupName = group;
+    if (reorder !== '' && num(reorder) !== num(item.reorder_level)) changes.reorderLevel = num(reorder);
+    if (rate != null && rate !== num(item.gst_rate ?? item.igstRate ?? item.taxRate)) {
+      changes.taxRate = rate;
+      changes.igstRate = rate;
+      changes.cgstRate = rate / 2;
+      changes.sgstRate = rate / 2;
+    }
+    if (!Object.keys(changes).length) return submit.setError('Change at least one field.');
+    const result = await submit.run(() => api.alterStockItemInTally({
+      companyGuid: company?.guid,
+      companyName: company?.name || '',
+      stockGuid: item.guid || item.id || item.stock_guid,
+      existingName: item.name,
+      name: item.name,
+      alias: alias.trim() || undefined,
+      hsnCode: hsn.trim() || undefined,
+      igstRate: rate ?? undefined,
+      cgstRate: rate != null ? rate / 2 : undefined,
+      sgstRate: rate != null ? rate / 2 : undefined,
+      notes: note.trim() || undefined,
+      changes,
+    }));
+    if (result) onCreated?.();
+  };
+
+  if (submit.done) return <Done done={submit.done} title="Stock edit" onClose={onClose} />;
+  return (
+    <div className="space-y-4">
+      <FormError error={submit.error} testid="stock-edit-error" />
+      <FormSection title="Item to edit" sub="Queued alter of an existing Tally stock master">
+        <Field label="Stock item *">
+          <SearchSelect value={itemName} required onChange={pickItem} options={opt.items || []}
+            placeholder="Select item…" testid="stock-edit-item"
+            subOf={o => [o.sku || o.hsn, `${itemQty(o)} ${itemUnit(o)}`].filter(Boolean).join(' · ')} />
+        </Field>
+      </FormSection>
+      {item && (
+        <FormSection title="Alter fields">
+          <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+            <Field label="Item name"><Input readOnly value={item.name} className="bg-cream/60" data-testid="stock-edit-name" /></Field>
+            <Field label="Current qty"><Input readOnly value={`${itemQty(item)} ${itemUnit(item)}`} className="bg-cream/60" data-testid="stock-edit-qty" /></Field>
+            <Field label="HSN / SAC"><Input value={hsn} onChange={e => setHsn(e.target.value.toUpperCase())} data-testid="stock-edit-hsn" /></Field>
+            <Field label="Alias"><Input value={alias} onChange={e => setAlias(e.target.value)} data-testid="stock-edit-alias" /></Field>
+            <Field label="GST rate %">
+              <Select value={gstRate} onChange={e => setGstRate(e.target.value)} data-testid="stock-edit-gst">
+                <option value="">No change</option>
+                {GST_RATES.map(r => <option key={r} value={r}>{r === '0' ? 'None (0%)' : `${r}%`}</option>)}
+              </Select>
+            </Field>
+            <Field label="Stock group">
+              <SearchSelect value={group} onChange={setGroup} options={namesOf(opt.stockGroups)} testid="stock-edit-group" placeholder="Select group…" />
+            </Field>
+            <Field label="Reorder level"><Input type="number" min="0" step="any" value={reorder} onChange={e => setReorder(e.target.value)} data-testid="stock-edit-reorder" /></Field>
+            <Field label="Notes / reference" className="sm:col-span-2"><Textarea value={note} onChange={e => setNote(e.target.value)} data-testid="stock-edit-note" /></Field>
+          </div>
+        </FormSection>
+      )}
+      <Button variant="primary" className="w-full" disabled={submit.saving || !item} onClick={save} data-testid="stock-edit-submit">
+        {submit.saving ? lt('Saving…') : lt('Update in Tally')}
+      </Button>
+    </div>
+  );
+}
+
 function parseGodowns(res, item) {
   const d = res?.data ?? res;
   const raw = Array.isArray(d?.warehouses) ? d.warehouses : Array.isArray(d) ? d : [];

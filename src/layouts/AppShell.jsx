@@ -61,7 +61,13 @@ const CREATE_MENU = [
   { label: 'Purchase', items: [['Purchase Invoice', 'purchase-invoice'], ['Purchase Order', 'purchase-order'], ['Debit Note', 'debit-note']] },
   { label: 'Voucher', items: [['Payment', 'payment'], ['Receipt', 'receipt'], ['Journal', 'journal'], ['Contra', 'contra'], ['Expense', 'expense']] },
   { label: 'Ledger', items: [['Sundry Creditor', 'sundry-creditor'], ['Sundry Debtor', 'sundry-debtor'], ['Duties and Taxes', 'duties-taxes'], ['Custom Group', 'custom-group']] },
-  { label: 'Inventory', items: [['Add Item', 'stock-item'], ['Add Warehouse', 'warehouse']] },
+  { label: 'Inventory', items: [
+    ['Add Item', 'stock-item'],
+    ['Add Warehouse', 'warehouse'],
+    ['Stock Transfer', 'stock-transfer'],
+    ['Stock Adjustment', 'stock-adjustment'],
+    ['Stock Edit', 'stock-edit'],
+  ] },
 ];
 
 const SEARCH_TARGETS = NAV.flatMap(g => g.items).concat([

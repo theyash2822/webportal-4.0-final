@@ -9,7 +9,11 @@ import {
 import api from '../services/api';
 import { useOpenCreate } from '../components/create/CreateDrawer';
 import { emptyLine } from '../components/create/common';
-import { buildInvoiceHTML, printInvoice } from '../utils/invoicePrint';
+import { printInvoice, htmlToPdfBlob } from '../utils/invoicePrint';
+import { downloadBlob } from '../services/invoicePdf';
+import CreamDocumentSheet from '../components/CreamDocumentSheet';
+import { buildCreamModel } from '../utils/creamPreviewModel';
+import { buildVoucherPdfHtml } from '../utils/voucherPdfBuild';
 
 export function useFmt() {
   const { formatAmount, formatAmountCompact, formatDate } = useSettings();
@@ -491,85 +495,117 @@ export function LedgerPanel({ id, onClose }) {
   );
 }
 
-export function VoucherDrawer({ voucher, onClose, onVoucherChanged }) {
+export function VoucherDrawer({ voucher, onClose }) {
   const { money, date } = useFmt();
   const lt = useLabelT();
   const { selectedCompany } = useAuth();
   const openCreate = useOpenCreate();
-  const [party, setParty] = useState(null);
   const [detail, setDetail] = useState(null);
+  const [full, setFull] = useState(null);
+  const [snapshot, setSnapshot] = useState(null);
   const [loading, setLoading] = useState(false);
-  const [detailError, setDetailError] = useState('');
-  const [previewError, setPreviewError] = useState('');
-  const [printing, setPrinting] = useState(false);
-  const [tallyBusy, setTallyBusy] = useState('');
-  const [cancelling, setCancelling] = useState(false);
-  const [previewHtml, setPreviewHtml] = useState('');
-  const detailReq = useRef(0);
-  const previewReq = useRef(0);
-  const previewPanelRef = useRef(null);
+  const [loadError, setLoadError] = useState('');
+  const [actionBusy, setActionBusy] = useState('');
+  const [actionError, setActionError] = useState('');
+  const reqRef = useRef(0);
   const voucherRef = useRef(voucher);
   voucherRef.current = voucher;
   const companyGuidRef = useRef(selectedCompany?.guid);
   companyGuidRef.current = selectedCompany?.guid;
   const voucherKey = voucher?.guid || voucher?.voucher_guid || voucher?.voucher_number || voucher?.id || '';
 
-  const fetchDetail = useCallback(async () => {
+  const load = useCallback(async () => {
     const row = voucherRef.current;
     const companyGuid = companyGuidRef.current;
     if (!row || !companyGuid) return;
-    const voucherId = resolveVoucherApiId(row);
-    if (!voucherId) { setDetail(row); setDetailError(''); setLoading(false); return; }
-    const seq = ++detailReq.current;
+    const seq = ++reqRef.current;
     setLoading(true);
-    setDetailError('');
+    setLoadError('');
+    setActionError('');
+    setSnapshot(null);
+    setFull(null);
+    setDetail(row);
     try {
-      const res = await api.fetchVoucherDetail({ companyGuid, voucherId });
-      if (seq !== detailReq.current) return;
-      const payload = res?.data || {};
-      // Keep list-row fields (tdk_reference_no, current_entry_type…) — the detail payload may not repeat them.
-      setDetail({ ...row, ...(payload.voucher || {}), items: payload.items || payload.voucher?.items || [], ledger_entries: payload.ledger_entries || [] });
-      setDetailError('');
+      const voucherId = resolveVoucherApiId(row);
+      const tdk = resolveTdkRef(row);
+      const tasks = [];
+      if (voucherId) {
+        tasks.push(
+          api.fetchVoucherDetail({ companyGuid, voucherId })
+            .then(res => ({ kind: 'detail', res }))
+            .catch(e => ({ kind: 'detail', err: e })),
+          api.fetchVoucherFull(companyGuid, voucherId)
+            .then(res => ({ kind: 'full', res }))
+            .catch(e => ({ kind: 'full', err: e })),
+        );
+      }
+      if (tdk) {
+        tasks.push(
+          api.fetchTallyInvoicePreview(tdk, companyGuid)
+            .then(res => ({ kind: 'preview', res }))
+            .catch(e => ({ kind: 'preview', err: e })),
+        );
+      }
+      const results = await Promise.all(tasks);
+      if (seq !== reqRef.current) return;
+      let nextDetail = row;
+      let nextFull = null;
+      let nextSnap = null;
+      let softErr = '';
+      for (const r of results) {
+        if (r.kind === 'detail') {
+          if (r.err) softErr = r.err.message || softErr;
+          else {
+            const payload = r.res?.data || {};
+            nextDetail = {
+              ...row,
+              ...(payload.voucher || {}),
+              items: payload.items || payload.voucher?.items || [],
+              ledger_entries: payload.ledger_entries || [],
+            };
+          }
+        }
+        if (r.kind === 'full' && !r.err) nextFull = r.res?.data || {};
+        if (r.kind === 'preview' && !r.err) nextSnap = r.res?.data || r.res || null;
+      }
+      setDetail(nextDetail);
+      setFull(nextFull);
+      setSnapshot(nextSnap);
+      if (!nextSnap && !nextDetail?.items?.length && softErr) setLoadError(softErr);
     } catch (e) {
-      if (seq !== detailReq.current) return;
-      // List row is still usable — keep soft error, don't wipe the drawer.
-      setDetail(row);
-      setDetailError(e.message || 'Failed to load voucher');
+      if (seq !== reqRef.current) return;
+      setLoadError(e.message || lt('Failed to load voucher'));
     } finally {
-      if (seq === detailReq.current) setLoading(false);
+      if (seq === reqRef.current) setLoading(false);
     }
-  }, []);
+  }, [lt]);
 
   useEffect(() => {
     if (!voucherKey || !selectedCompany?.guid) return;
-    previewReq.current += 1;
+    reqRef.current += 1;
     setDetail(null);
-    setDetailError('');
-    setPreviewError('');
-    setPreviewHtml('');
-    setTallyBusy('');
-    setParty(null);
-    fetchDetail();
-    // fetchDetail is stable (empty deps) — must NOT depend on lt/load or we get an infinite refetch loop.
-  }, [voucherKey, selectedCompany?.guid, fetchDetail]);
-
-  useEffect(() => {
-    if (!previewHtml) return;
-    previewPanelRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' });
-  }, [previewHtml]);
+    setFull(null);
+    setSnapshot(null);
+    setLoadError('');
+    setActionError('');
+    setActionBusy('');
+    load();
+  }, [voucherKey, selectedCompany?.guid, load]);
 
   if (!voucher) return null;
   const row = detail || voucher;
-  const items = row.items || [];
-
-  /* Convert / create-from actions (mobile parity). Eligibility mirrors mobile:
-   * proforma → convert needs a TDK ref and a not-yet-regular entry; orders just prefill. */
-  const vt = (row.voucher_type || '').toLowerCase();
   const tdkRef = resolveTdkRef(row);
+  const cream = buildCreamModel({
+    doc: snapshot,
+    row,
+    full,
+    company: selectedCompany,
+    formatDate: date,
+  });
+
+  const vt = (row.voucher_type || cream.voucherType || '').toLowerCase();
   const isProforma = vt.includes('proforma')
     || (!!tdkRef && row.original_entry_type === 'optional' && vt.includes('sales') && !vt.includes('order'));
-  // Mirrors mobile eligibility: proforma type, still optional (never converted), TDK ref,
-  // and present in the synced register (rows only exist here after a Tally sync).
   const stillOptional = row.is_optional === true || row.is_optional === 't'
     || row.original_entry_type === 'optional' || vt.includes('proforma');
   const canConvertProforma = isProforma && stillOptional && !!tdkRef
@@ -578,25 +614,27 @@ export function VoucherDrawer({ voucher, onClose, onVoucherChanged }) {
     && !row.is_cancelled;
   const isSalesOrder = vt.includes('sales order') && !row.is_cancelled;
   const isPurchaseOrder = vt.includes('purchase order') && !row.is_cancelled;
-  const prefillLines = () => (items || [])
-    .filter(it => it.name || it.item_name)
-    .map(it => ({
-      ...emptyLine(),
-      name: it.name || it.item_name,
-      qty: Math.abs(parseFloat(it.qty ?? it.actual_qty ?? it.billed_qty)) || 1,
-      rate: Math.abs(parseFloat(it.rate)) || '',
-      unit: it.unit || '',
-      godown: it.godown || it.godown_name || '',
-    }));
-  const startInvoice = (kind, extra) => {
-    // Sales/purchase ledger comes from the source voucher's item allocations
-    // (never the party ledger); GST rows from its ledger entries.
-    const itemLedger = (items || []).map(it => it.ledger_name).find(n => n && n !== row.party_name) || '';
+
+  const startInvoice = (kind, extra = {}) => {
+    const itemLedger = (row.items || []).find(it => it.sales_ledger || it.purchase_ledger || it.ledger)?.sales_ledger
+      || (row.items || []).find(it => it.purchase_ledger)?.purchase_ledger
+      || '';
     const taxes = (row.ledger_entries || [])
-      .filter(e => /\b(gst|igst|cgst|sgst|utgst|cess)\b/i.test(e.ledger_name || ''))
-      .map(e => ({ ledgerName: e.ledger_name, taxRate: '', taxAmount: Math.abs(parseFloat(e.amount)) || '' }));
+      .filter(e => /gst|cgst|sgst|igst|cess/i.test(e.ledger_name || ''))
+      .map(e => ({ ledger: e.ledger_name, rate: '', amount: String(Math.abs(Number(e.amount) || 0)) }));
+    const prefillLines = () => (row.items || []).filter(it => it.name || it.item_name || it.stock_item_name).map(it => ({
+      ...emptyLine(),
+      name: it.name || it.item_name || it.stock_item_name,
+      qty: String(it.qty ?? it.billed_qty ?? it.actual_qty ?? ''),
+      rate: String(it.rate ?? ''),
+      unit: it.unit || '',
+      godown: it.godown || it.warehouse || '',
+      hsn: it.hsn || '',
+    }));
     openCreate(kind, {
       party: row.party_name || '',
+      reference: row.reference || '',
+      againstOrderNo: isSalesOrder || isPurchaseOrder ? (row.voucher_number || '') : undefined,
       narration: row.narration || '',
       ledger: itemLedger,
       date: row.date || '',
@@ -607,169 +645,38 @@ export function VoucherDrawer({ voucher, onClose, onVoucherChanged }) {
     onClose();
   };
 
-  const handlePrint = async () => {
-    setPrinting(true);
-    setPreviewError('');
+  const runPdf = async (mode) => {
+    setActionBusy(mode);
+    setActionError('');
     try {
-      const voucherId = resolveVoucherApiId(row);
-      // Fetch full voucher (company/party GST/gst details), print profile and logo in parallel.
-      const [fullRes, profileRes, logoRes] = await Promise.allSettled([
-        api.fetchVoucherFull(selectedCompany.guid, voucherId),
-        api.fetchPrintProfile(selectedCompany.guid),
-        api.fetchCompanyLogo(selectedCompany.guid),
-      ]);
-      const full = fullRes.status === 'fulfilled' ? (fullRes.value?.data || {}) : {};
-      const html = buildInvoiceHTML({
-        voucher: { ...row, ...(full.voucher || {}) },
-        company: full.company || selectedCompany || {},
-        party: full.party || {},
-        gst: full.gst || null,
-        items: (full.items && full.items.length ? full.items : items),
-        ledgerEntries: full.ledger_entries || row.ledger_entries || [],
-        eInvoice: full.e_invoice || null,
-        eWayBill: full.e_way_bill || null,
-        profile: profileRes.status === 'fulfilled' ? (profileRes.value?.data || {}) : {},
-        logoUrl: logoRes.status === 'fulfilled' ? (logoRes.value?.data?.logo_url || '') : '',
-        formatDate: date,
+      const { html, filename, thermalPaperWidth } = await buildVoucherPdfHtml({
+        cream, doc: snapshot, row, full, company: selectedCompany, formatDate: date,
       });
-      printInvoice(html);
+      if (mode === 'print') {
+        printInvoice(html);
+      } else {
+        if (tdkRef && selectedCompany?.guid) {
+          try { await api.shareTallyInvoicePdf(tdkRef, { companyGuid: selectedCompany.guid }); } catch { /* local PDF still shared */ }
+        }
+        const blob = await htmlToPdfBlob(html, { thermalPaperWidth });
+        const party = cream.partyName || row.party_name || '';
+        const text = [cream.voucherType || row.voucher_type || 'Invoice', cream.number || row.voucher_number, party]
+          .filter(Boolean).join(' · ');
+        const file = new File([blob], filename, { type: 'application/pdf' });
+        if (navigator.canShare?.({ files: [file] })) {
+          try {
+            await navigator.share({ files: [file], text });
+          } catch (e) {
+            if (e?.name !== 'AbortError') downloadBlob(blob, filename);
+          }
+        } else {
+          downloadBlob(blob, filename);
+        }
+      }
     } catch (e) {
-      setPreviewError(e.message || lt('Failed to prepare invoice for printing'));
+      setActionError(e.message || lt('Unable to prepare PDF'));
     } finally {
-      setPrinting(false);
-    }
-  };
-
-  const handleTallyPreview = async () => {
-    if (!tdkRef || !selectedCompany?.guid) {
-      setPreviewError(lt('Tally preview needs a TDK reference on this voucher'));
-      return;
-    }
-    const seq = ++previewReq.current;
-    setTallyBusy('preview');
-    setPreviewError('');
-    setDetailError(''); // dismiss detail banner once user opens preview
-    setPreviewHtml(''); // clear previous voucher's preview immediately
-    try {
-      const res = await api.fetchTallyInvoicePreview(tdkRef, selectedCompany.guid);
-      if (seq !== previewReq.current) return;
-      const doc = res?.data || res || {};
-      // Mobile renders this as a VoucherDocument UI — not raw JSON / not HTML.
-      // Map the same snapshot into our print template for an on-screen invoice preview.
-      const company = doc.company || {
-        name: doc.companyName || selectedCompany.name,
-        gstin: doc.gstin, pan: doc.pan, phone: doc.phone, email: doc.email,
-        address: doc.address || doc.state, state: doc.state,
-      };
-      const partyInfo = doc.party || doc.billing || {
-        name: doc.partyName || row.party_name,
-        address: doc.billing?.address || doc.shipping?.address,
-        gstin: doc.partyGstin || doc.billing?.gstin,
-      };
-      const previewItems = (doc.items || []).map((it, i) => ({
-        id: it.id || i,
-        name: it.name || it.itemName || it.item_name,
-        hsn: it.hsn,
-        qty: it.qty ?? it.billedQty ?? it.billed_qty,
-        unit: it.unit,
-        rate: it.rate,
-        discount: it.discount,
-        amount: it.amount ?? it.lineTotal,
-      }));
-      const taxes = doc.taxes || [];
-      const gst = {
-        cgst_amount: taxes.find(t => /cgst/i.test(t.name || t.ledgerName || ''))?.amount,
-        sgst_amount: taxes.find(t => /sgst/i.test(t.name || t.ledgerName || ''))?.amount,
-        igst_amount: taxes.find(t => /igst/i.test(t.name || t.ledgerName || ''))?.amount,
-        taxable_amount: doc.totals?.taxable ?? doc.totals?.subtotal,
-        place_of_supply: doc.metadata?.placeOfSupply || doc.tallyMeta?.placeOfSupply,
-      };
-      const html = buildInvoiceHTML({
-        voucher: {
-          voucher_number: doc.documentNumber || doc.voucherNumber || row.voucher_number,
-          voucher_type: doc.tallyVoucherType || doc.documentTitle || row.voucher_type,
-          date: doc.date || row.date,
-          amount: doc.totals?.grandTotal ?? doc.totals?.total ?? row.amount,
-          party_amount: doc.totals?.grandTotal ?? doc.totals?.total ?? row.amount,
-          reference: doc.reference || doc.tdkRef || tdkRef,
-          narration: doc.narration,
-        },
-        company: {
-          ...company,
-          name: company.name || company.formal_name || selectedCompany.name,
-          address: company.address || [company.addressLine1, company.addressLine2, company.city, company.state, company.pincode].filter(Boolean).join(', '),
-        },
-        party: {
-          ...partyInfo,
-          name: partyInfo.name || partyInfo.ledgerName || row.party_name,
-          address: partyInfo.address || [partyInfo.addressLine1, partyInfo.addressLine2, partyInfo.city, partyInfo.state, partyInfo.pincode].filter(Boolean).join(', '),
-        },
-        gst,
-        items: previewItems,
-        ledgerEntries: (doc.ledgerEntries || []).map(e => ({
-          ledger_name: e.ledgerName || e.ledger_name || e.name,
-          amount: e.amount,
-        })),
-        eInvoice: doc.eInvoice || null,
-        eWayBill: doc.eWayBill || doc.dispatchDetails || null,
-        profile: {},
-        logoUrl: '',
-        formatDate: date,
-      });
-      setPreviewHtml(html);
-      setPreviewError('');
-      setDetailError('');
-    } catch (e) {
-      if (seq !== previewReq.current) return;
-      setPreviewHtml('');
-      setPreviewError(e.message || lt('Tally preview failed'));
-    } finally {
-      if (seq === previewReq.current) setTallyBusy('');
-    }
-  };
-
-  const canCancel = !row.is_cancelled && !String(row.status || '').toLowerCase().includes('cancel')
-    && !!(resolveVoucherApiId(row) || tdkRef);
-
-  const handleCancel = async () => {
-    if (!selectedCompany?.guid || !canCancel || cancelling) return;
-    const voucherId = resolveVoucherApiId(row);
-    const confirmMsg = lt('Cancel this voucher in Tally? This cannot be undone from the portal.');
-    if (!window.confirm(confirmMsg)) return;
-    setCancelling(true);
-    setPreviewError('');
-    try {
-      await api.cancelVoucher({
-        companyGuid: selectedCompany.guid,
-        companyName: selectedCompany.name || selectedCompany.companyName || '',
-        voucherGuid: voucherId || undefined,
-        tdkRef: tdkRef || undefined,
-        voucherNumber: row.voucher_number || row.voucherNumber || undefined,
-        voucherType: row.voucher_type || row.voucherType || undefined,
-      });
-      onVoucherChanged?.();
-      onClose();
-    } catch (e) {
-      setPreviewError(e.message || lt('Unable to cancel voucher'));
-    } finally {
-      setCancelling(false);
-    }
-  };
-
-  const handleTallySharePdf = async () => {
-    if (!tdkRef || !selectedCompany?.guid) {
-      setPreviewError(lt('Share PDF needs a TDK reference on this voucher'));
-      return;
-    }
-    setTallyBusy('share');
-    setPreviewError('');
-    try {
-      await api.shareTallyInvoicePdf(tdkRef, { companyGuid: selectedCompany.guid });
-      window.open(`https://wa.me/?text=${encodeURIComponent(`${row.voucher_type || 'Invoice'} ${row.voucher_number || tdkRef}`)}`, '_blank', 'noopener');
-    } catch (e) {
-      setPreviewError(e.message || lt('Share PDF failed'));
-    } finally {
-      setTallyBusy('');
+      setActionBusy('');
     }
   };
 
@@ -778,153 +685,58 @@ export function VoucherDrawer({ voucher, onClose, onVoucherChanged }) {
       open
       onClose={onClose}
       testid="voucher-drawer"
-      title={row.voucher_number}
-      sub={`${row.voucher_type} · ${date(row.date)}`}
+      title={cream.number || row.voucher_number || lt('Voucher')}
+      sub={`${cream.voucherType || row.voucher_type || lt('Voucher')} · ${cream.dateLabel || date(row.date)}`}
       footer={
-        <div className="flex w-full flex-wrap items-center justify-end gap-2">
-          {canConvertProforma && (
-            <Button
-              variant="primary"
-              data-testid="voucher-convert-button"
-              disabled={loading}
-              onClick={() => startInvoice('sales-invoice', { convertTdkRef: tdkRef, reference: row.reference || '' })}
-            >
-              {lt('Convert to Invoice')}
+        <div className="flex w-full flex-col gap-2">
+          {(canConvertProforma || isSalesOrder || isPurchaseOrder) && (
+            <div className="flex flex-wrap gap-2">
+              {canConvertProforma && (
+                <Button variant="primary" data-testid="voucher-convert-button" disabled={loading}
+                  onClick={() => startInvoice('sales-invoice', { convertTdkRef: tdkRef, reference: row.reference || '' })}>
+                  {lt('Convert to Invoice')}
+                </Button>
+              )}
+              {(isSalesOrder || isPurchaseOrder) && (
+                <Button variant="primary" data-testid="voucher-create-invoice-button" disabled={loading}
+                  onClick={() => startInvoice(isPurchaseOrder ? 'purchase-invoice' : 'sales-invoice', { againstOrderNo: row.voucher_number || '' })}>
+                  {lt('Create Invoice from Order')}
+                </Button>
+              )}
+            </div>
+          )}
+          <div className="flex w-full flex-wrap items-center gap-2">
+            <Button data-testid="voucher-share-pdf" disabled={!!actionBusy || loading} onClick={() => runPdf('share')}>
+              {actionBusy === 'share' ? lt('Preparing…') : lt('Share PDF')}
             </Button>
-          )}
-          {(isSalesOrder || isPurchaseOrder) && (
-            <Button
-              variant="primary"
-              data-testid="voucher-create-invoice-button"
-              disabled={loading}
-              onClick={() => startInvoice(isPurchaseOrder ? 'purchase-invoice' : 'sales-invoice', { againstOrderNo: row.voucher_number || '' })}
-            >
-              {lt('Create Invoice from Order')}
+            <Button variant="primary" data-testid="voucher-print-pdf" disabled={!!actionBusy || loading} onClick={() => runPdf('print')}>
+              {actionBusy === 'print' ? lt('Preparing…') : lt('Print PDF')}
             </Button>
-          )}
-          {tdkRef && (
-            <>
-              <Button data-testid="voucher-tally-preview" disabled={!!tallyBusy} onClick={handleTallyPreview}>
-                {tallyBusy === 'preview' ? lt('Loading…') : lt('Tally preview')}
-              </Button>
-              <Button data-testid="voucher-tally-share-pdf" disabled={!!tallyBusy} onClick={handleTallySharePdf}>
-                {tallyBusy === 'share' ? lt('Sharing…') : lt('Share PDF (Tally)')}
-              </Button>
-            </>
-          )}
-          <Button
-            data-testid="voucher-whatsapp-button"
-            onClick={() => {
-              const summary = [
-                 `*${row.voucher_type || lt('Voucher')} ${row.voucher_number || ''}*`,
-                selectedCompany?.name,
-                 row.party_name ? `${lt('Party')}: ${row.party_name}` : null,
-                 `${lt('Date')}: ${date(row.date)}`,
-                 `${lt('Amount')}: ${money(row.party_amount ?? row.amount)}`,
-              ].filter(Boolean).join('\n');
-              window.open(`https://wa.me/?text=${encodeURIComponent(summary)}`, '_blank', 'noopener');
-            }}
-          >
-            {lt('Share on WhatsApp')}
-          </Button>
-          <Button variant="primary" data-testid="voucher-print-button" disabled={printing} onClick={handlePrint}>
-            {printing ? lt('Preparing…') : lt('Print / PDF')}
-          </Button>
-          {canCancel && (
-            <Button
-              variant="ghost"
-              data-testid="voucher-cancel-button"
-              disabled={cancelling || !!tallyBusy}
-              onClick={handleCancel}
-              className="text-neg hover:bg-neg-bg"
-            >
-              {cancelling ? lt('Cancelling…') : lt('Cancel voucher')}
-            </Button>
-          )}
+          </div>
         </div>
       }
     >
-      <div className="space-y-5">
-        {loading && !detail && <p className="text-[13px] text-ink-soft">{lt('Loading voucher details…')}</p>}
-        {detailError && !previewHtml && (
-          <p className="rounded-xl border border-line bg-cream/50 px-3 py-2 text-[12px] text-ink-soft" data-testid="voucher-detail-warning">
-            {detailError}{' '}
-            <button type="button" className="font-semibold text-ink underline" onClick={fetchDetail}>{lt('Retry')}</button>
+      <div className="space-y-4">
+        {loading && <p className="text-[13px] text-ink-soft">{lt('Loading voucher…')}</p>}
+        {loadError && (
+          <p className="rounded-xl border border-line bg-cream/50 px-3 py-2 text-[12px] text-ink-soft" data-testid="voucher-load-warning">
+            {loadError}{' '}
+            <button type="button" className="font-semibold text-ink underline" onClick={load}>{lt('Retry')}</button>
           </p>
         )}
-        {previewError && (
-          <Empty message={previewError} hint={<Button onClick={() => setPreviewError('')}>{lt('Dismiss')}</Button>} />
+        {actionError && (
+          <Empty message={actionError} hint={<Button onClick={() => setActionError('')}>{lt('Dismiss')}</Button>} />
         )}
-        {previewHtml && (
-          <div ref={previewPanelRef}>
-            <Panel title={lt('Tally invoice preview')} sub={lt('Same snapshot as mobile — GET /tally/invoice/:ref/preview')}>
-              <iframe
-                title={lt('Tally invoice preview')}
-                data-testid="tally-invoice-preview-frame"
-                className="h-[520px] w-full rounded-xl border border-line bg-white"
-                srcDoc={previewHtml}
-                sandbox="allow-same-origin"
-              />
-            </Panel>
-          </div>
-        )}
-        <div>
-          <KV
-            label="Party"
-            value={row.party_name ? (
-              <button
-                data-testid="voucher-open-party"
-                onClick={() => setParty(row.party_name)}
-                className="text-[13px] font-medium text-ink underline decoration-line-strong underline-offset-4 transition-colors hover:text-ink-soft"
-              >
-                {row.party_name}
-              </button>
-            ) : '—'}
-          />
-          <KV label="Voucher type" value={row.voucher_type} />
-          <KV label="Date" value={date(row.date)} mono />
-          <KV label="Amount" value={money(row.party_amount ?? row.amount)} mono />
-          <KV label="Status" value={<Status value={row.is_cancelled ? 'Cancelled' : row.status || 'Synced'} />} />
+        {!loading && <CreamDocumentSheet model={cream} />}
+        <div className="grid grid-cols-2 gap-2 rounded-xl border border-line bg-cream/40 px-3 py-2 text-[11px] text-ink-soft">
+          <span>{lt('Amount')}: <span className="font-semibold tabular text-ink">{money(cream.total || row.party_amount || row.amount)}</span></span>
+          <span className="text-right">{lt('Status')}: <Status value={row.is_cancelled ? 'Cancelled' : row.status || 'Synced'} /></span>
         </div>
-
-        {items.length > 0 && (
-          <div>
-            <p className="mb-2.5 text-[11px] font-medium text-ink-soft">{lt('Line items')}</p>
-            <div className="overflow-hidden rounded-2xl border border-line">
-              <table className="w-full">
-                <thead className="bg-cream/70">
-                  <tr>
-                    {['Item', 'Qty', 'Rate', 'Amount'].map(h => (
-                       <th key={h} className={`px-3.5 py-2.5 text-[11px] font-medium text-ink-soft ${h === 'Item' ? 'text-left' : 'text-right'}`}>{lt(h)}</th>
-                    ))}
-                  </tr>
-                </thead>
-                <tbody>
-                  {items.map((it, i) => (
-                    <tr key={i} className="border-t border-line-subtle">
-                       <td className="px-3 py-2 text-[11px]">{it.name || it.item_name || it.ledger_name}</td>
-                       <td className="px-3 py-2 text-[11px] text-right tabular">{it.qty ?? it.actual_qty ?? it.billed_qty} {it.unit}</td>
-                      <td className="px-3 py-2 text-[11px] text-right tabular">{money(it.rate)}</td>
-                      <td className="px-3 py-2 text-[11px] text-right tabular font-medium">{money(it.amount)}</td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
-          </div>
-        )}
-
-         {row.narration && (
-          <div>
-             <p className="mb-1.5 text-[11px] font-medium text-ink-soft">{lt('Narration')}</p>
-             <p className="text-[13px] text-ink-soft">{row.narration}</p>
-          </div>
-        )}
       </div>
-      {party && <PartyPanel id={party} onClose={() => setParty(null)} />}
     </Drawer>
   );
 }
+
 
 
 /* ── Simple money table used across analytics screens ─────────────────────── */

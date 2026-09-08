@@ -90,9 +90,21 @@ export function buildInvoiceHTML({
   voucher = {}, company = {}, party = {}, gst = null, items = [],
   ledgerEntries = [], eInvoice = null, eWayBill = null,
   profile = {}, logoUrl = '', formatDate = (d) => d || '',
+  format = 'tally_classic_v1',
 }) {
   const title = docTitle(voucher.voucher_type);
   const grandTotal = Math.abs(Number(voucher.party_amount ?? voucher.amount) || 0);
+  const fmt = String(format || 'tally_classic_v1');
+  // Thermal is rendered by buildThermalHTML — if it reaches here, treat as classic.
+  const isLedger = false;
+  const isExec = fmt === 'td_executive_v1' || fmt === 'modern_b';
+  // Classic: black ruled Tally look · Executive: cream shell + charcoal
+  const accent = isExec ? '#3D3A34' : '#000000';
+  const thBg = isExec ? '#3D3A34' : '#000000';
+  const grandBg = isExec ? '#3D3A34' : '#000000';
+  const r = isExec ? '6px' : '0';
+  const borderStyle = isExec ? '1px solid #ddd' : '1px solid #000';
+  const wordsBg = isExec ? '#F4F1E9' : '#f5f5f5';
 
   // Item rows (inventory) — fall back to non-party, non-tax ledger rows for
   // accounting-only vouchers so the table is never empty.
@@ -172,51 +184,9 @@ export function buildInvoiceHTML({
   ].filter(([, v]) => v);
 
   const terms = (profile.declarationText || '').trim();
+  const formatLabel = isExec ? 'TallyDekho Executive' : isLedger ? 'TallyDekho Ledger' : 'Tally Classic';
 
-  return `<!DOCTYPE html><html><head><meta charset="utf-8"><title>${esc(voucher.voucher_number || title)}</title>
-<style>
-  * { margin: 0; padding: 0; box-sizing: border-box; }
-  body { font: 12px/1.45 'Segoe UI', Arial, sans-serif; color: #1a1a1a; padding: 28px 32px; }
-  .head { display: flex; justify-content: space-between; align-items: flex-start; gap: 16px;
-          border-bottom: 3px solid #16803c; padding-bottom: 14px; }
-  .co { display: flex; gap: 14px; align-items: flex-start; }
-  .logo { max-height: 64px; max-width: 120px; object-fit: contain; }
-  h1 { font-size: 19px; letter-spacing: .2px; }
-  .muted { color: #555; font-size: 11px; }
-  .doc { text-align: right; }
-  .doc .t { font-size: 16px; font-weight: 700; color: #16803c; letter-spacing: 1px; }
-  .cols { display: flex; gap: 20px; margin: 14px 0; }
-  .col { flex: 1; border: 1px solid #ddd; border-radius: 6px; padding: 10px 12px; }
-  .col h3 { font-size: 10px; text-transform: uppercase; letter-spacing: .8px; color: #16803c; margin-bottom: 5px; }
-  .col b { font-size: 13px; }
-  .kv td { padding: 1.5px 0; font-size: 11.5px; vertical-align: top; }
-  .kv td:first-child { color: #666; padding-right: 10px; white-space: nowrap; }
-  table.items { width: 100%; border-collapse: collapse; margin-top: 4px; }
-  table.items th { background: #16803c; color: #fff; font-size: 10.5px; text-transform: uppercase;
-                   letter-spacing: .5px; padding: 7px 8px; text-align: left; }
-  table.items td { border-bottom: 1px solid #e5e5e5; padding: 6px 8px; font-size: 11.5px; }
-  table.items .sub { font-size: 10px; color: #777; }
-  .r { text-align: right; } .c { text-align: center; }
-  table.items th.r { text-align: right; } table.items th.c { text-align: center; }
-  .bottom { display: flex; gap: 20px; margin-top: 12px; align-items: flex-start; }
-  .totals { margin-left: auto; width: 260px; border-collapse: collapse; }
-  .totals td { padding: 4px 8px; font-size: 12px; border-bottom: 1px solid #eee; }
-  .totals .grand td { background: #16803c; color: #fff; font-weight: 700; font-size: 13px; border: 0; }
-  .words { margin-top: 10px; padding: 8px 10px; background: #f4f8f5; border-left: 3px solid #16803c;
-           font-size: 11.5px; font-style: italic; }
-  .foot { display: flex; gap: 20px; margin-top: 16px; align-items: stretch; }
-  .box { flex: 1; border: 1px solid #ddd; border-radius: 6px; padding: 10px 12px; }
-  .box h3 { font-size: 10px; text-transform: uppercase; letter-spacing: .8px; color: #16803c; margin-bottom: 5px; }
-  .terms { white-space: pre-wrap; font-size: 10.5px; color: #444; }
-  .sign { text-align: right; display: flex; flex-direction: column; justify-content: flex-end; }
-  .sign .line { margin-top: 42px; border-top: 1px solid #999; padding-top: 4px; font-size: 11px; }
-  .cancel { position: fixed; top: 40%; left: 0; right: 0; text-align: center; font-size: 64px;
-            color: rgba(200,30,30,.18); font-weight: 800; transform: rotate(-18deg); letter-spacing: 6px; }
-  @media print { body { padding: 0; } @page { margin: 14mm 12mm; } }
-</style></head><body>
-${voucher.is_cancelled ? '<div class="cancel">CANCELLED</div>' : ''}
-<div class="head">
-  <div class="co">
+  const companyBlock = `
     ${logoUrl ? `<img class="logo" src="${esc(logoUrl)}" alt="logo">` : ''}
     <div>
       <h1>${esc(company.name || company.formal_name || '')}</h1>
@@ -224,28 +194,21 @@ ${voucher.is_cancelled ? '<div class="cancel">CANCELLED</div>' : ''}
       <div class="muted">${[company.state, company.pincode].filter(Boolean).map(esc).join(' - ')}</div>
       <div class="muted">${[gstin && `GSTIN: ${gstin}`, pan && `PAN: ${pan}`].filter(Boolean).map(esc).join(' · ')}</div>
       <div class="muted">${[phone, email].filter(Boolean).map(esc).join(' · ')}</div>
-    </div>
-  </div>
-  <div class="doc">
-    <div class="t">${esc(title)}</div>
-    <div class="muted"># ${esc(voucher.voucher_number || '')}</div>
-    <div class="muted">${esc(formatDate(voucher.date))}</div>
-  </div>
-</div>
-<div class="cols">
-  <div class="col">
+    </div>`;
+
+  const partyBlock = `
     <h3>${esc(partyHeading(voucher.voucher_type))}</h3>
     <b>${esc(voucher.party_name || party.name || '')}</b>
     ${partyAddr.map(l => `<div class="muted">${esc(l)}</div>`).join('')}
     <div class="muted">${[party.state_name, party.pincode].filter(Boolean).map(esc).join(' - ')}</div>
     <div class="muted">${[party.gstin && `GSTIN: ${party.gstin}`, party.pan && `PAN: ${party.pan}`].filter(Boolean).map(esc).join(' · ')}</div>
-    <div class="muted">${[party.phone || party.mobile, party.email].filter(Boolean).map(esc).join(' · ')}</div>
-  </div>
-  <div class="col">
+    <div class="muted">${[party.phone || party.mobile, party.email].filter(Boolean).map(esc).join(' · ')}</div>`;
+
+  const detailsBlock = `
     <h3>Details</h3>
-    <table class="kv">${metaRows.map(([k, v]) => `<tr><td>${esc(k)}</td><td>${esc(v)}</td></tr>`).join('')}</table>
-  </div>
-</div>
+    <table class="kv">${metaRows.map(([k, v]) => `<tr><td>${esc(k)}</td><td>${esc(v)}</td></tr>`).join('')}</table>`;
+
+  const itemsTable = `
 <table class="items">
   <thead><tr>
     <th class="c" style="width:34px">#</th><th>${useLedgerRows ? 'Particulars' : 'Item'}</th>
@@ -255,35 +218,261 @@ ${voucher.is_cancelled ? '<div class="cancel">CANCELLED</div>' : ''}
     <th class="r" style="width:110px">Amount</th>
   </tr></thead>
   <tbody>${rowsHtml || `<tr><td colspan="${colCount}" class="c muted">No line items</td></tr>`}</tbody>
-</table>
-<div class="bottom"><table class="totals">${totalsHtml}</table></div>
-<div class="words"><b>Amount in words:</b> ${esc(amountInWords(grandTotal))}</div>
-${voucher.narration ? `<div class="words" style="background:#fafafa;border-color:#bbb"><b>Narration:</b> ${esc(voucher.narration)}</div>` : ''}
+</table>`;
+
+  const footBlocks = `
 <div class="foot">
   ${bankRows.length ? `<div class="box"><h3>Bank Details</h3><table class="kv">${bankRows.map(([k, v]) => `<tr><td>${esc(k)}</td><td>${esc(v)}</td></tr>`).join('')}</table></div>` : ''}
   ${terms ? `<div class="box"><h3>Terms &amp; Conditions</h3><div class="terms">${esc(terms)}</div></div>` : ''}
   <div class="box sign"><div class="muted">For ${esc(company.name || '')}</div><div class="line">Authorised Signatory</div></div>
+</div>`;
+
+  // Three structurally different chrome layouts (not just color swaps).
+  let bodyHtml;
+  if (isLedger) {
+    bodyHtml = `
+<div class="ledger-banner">
+  <div class="co">${companyBlock}</div>
+  <div class="ledger-title">${esc(title)}</div>
 </div>
+<div class="cols">
+  <div class="col">${partyBlock}</div>
+  <div class="col">${detailsBlock}</div>
+</div>
+${itemsTable}
+<div class="bottom"><table class="totals">${totalsHtml}</table></div>
+<div class="words"><b>Amount in words:</b> ${esc(amountInWords(grandTotal))}</div>
+${voucher.narration ? `<div class="words"><b>Narration:</b> ${esc(voucher.narration)}</div>` : ''}
+${footBlocks}`;
+  } else if (isExec) {
+    bodyHtml = `
+<div class="exec-shell">
+  <div class="exec-top">
+    <div class="exec-left">${companyBlock}</div>
+    <div class="exec-right">
+      <div class="exec-doc">${esc(title)}</div>
+      <table class="kv">${metaRows.map(([k, v]) => `<tr><td>${esc(k)}</td><td>${esc(v)}</td></tr>`).join('')}</table>
+    </div>
+  </div>
+  <div class="exec-party">${partyBlock}</div>
+  ${itemsTable}
+  <div class="bottom"><table class="totals">${totalsHtml}</table></div>
+  <div class="words"><b>Amount in words:</b> ${esc(amountInWords(grandTotal))}</div>
+  ${voucher.narration ? `<div class="words"><b>Narration:</b> ${esc(voucher.narration)}</div>` : ''}
+  ${footBlocks}
+</div>`;
+  } else {
+    bodyHtml = `
+<div class="ribbon">${esc(title)}</div>
+<div class="head classic-head">
+  <div class="co classic-co">${companyBlock}</div>
+  <div class="doc-meta"><b># ${esc(voucher.voucher_number || '')}</b> · ${esc(formatDate(voucher.date))}</div>
+</div>
+<div class="cols">
+  <div class="col">${partyBlock}</div>
+  <div class="col">${detailsBlock}</div>
+</div>
+${itemsTable}
+<div class="bottom"><table class="totals">${totalsHtml}</table></div>
+<div class="words"><b>Amount in words:</b> ${esc(amountInWords(grandTotal))}</div>
+${voucher.narration ? `<div class="words" style="background:#fafafa;border-color:#bbb"><b>Narration:</b> ${esc(voucher.narration)}</div>` : ''}
+${footBlocks}`;
+  }
+
+  return `<!DOCTYPE html><html><head><meta charset="utf-8"><title>${esc(voucher.voucher_number || title)}</title>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  @page { size: A4; margin: 12mm; }
+  body { font: 11px/1.4 Arial, Helvetica, sans-serif; color: #1a1a1a; padding: 16px 18px;
+         background: ${isExec ? '#F7F4EC' : '#fff'}; }
+  .ribbon { text-align: center; font-size: 12px; font-weight: 700; letter-spacing: .6px;
+            padding: 6px 0; border-top: 1px solid #000; border-bottom: 1px solid #000;
+            background: #fff; color: #1a1a1a; margin-bottom: 8px; }
+  .classic-head { text-align: center; padding-bottom: 10px; border-bottom: 1px solid #000; margin-bottom: 10px; }
+  .classic-co { display: block; }
+  .classic-co .logo { display: block; margin: 0 auto 6px; }
+  .ledger-banner { background: #1B3A5C; color: #fff; border-radius: 8px; padding: 14px 16px; margin-bottom: 12px; }
+  .ledger-banner .muted { color: rgba(255,255,255,.78) !important; }
+  .ledger-banner h1 { color: #fff; font-size: 16px; }
+  .ledger-banner .co { display: flex; gap: 12px; align-items: flex-start; }
+  .ledger-title { margin-top: 10px; text-align: center; font-size: 13px; font-weight: 700;
+                  letter-spacing: .8px; border-top: 1px solid rgba(255,255,255,.25); padding-top: 8px; }
+  .exec-shell { border: 1px solid #C9C2B4; border-left: 6px solid #3D3A34; background: #FFFEFA;
+                border-radius: 4px; padding: 14px; }
+  .exec-top { display: flex; gap: 16px; margin-bottom: 12px; padding-bottom: 12px; border-bottom: 2px solid #3D3A34; }
+  .exec-left { flex: 1.2; } .exec-right { flex: 1; }
+  .exec-doc { font-size: 15px; font-weight: 800; color: #3D3A34; margin-bottom: 8px; letter-spacing: .3px; }
+  .exec-party { border: 1px solid #D9D2C4; background: #F4F1E9; border-radius: 4px; padding: 10px; margin-bottom: 12px; }
+  .co { display: flex; gap: 12px; align-items: flex-start; }
+  .logo { max-height: 48px; max-width: 110px; object-fit: contain; }
+  h1 { font-size: ${isExec ? '15px' : '14px'}; letter-spacing: .2px; }
+  .muted { color: #555; font-size: 10px; }
+  .doc-meta { margin-top: 6px; font-size: 10px; }
+  .cols { display: flex; gap: 12px; margin: 10px 0; }
+  .col { flex: 1; border: ${borderStyle}; border-radius: ${r}; padding: 8px 10px;
+         background: ${isLedger ? '#F7FAFC' : '#fff'}; }
+  .col h3 { font-size: 9px; text-transform: uppercase; letter-spacing: .7px; color: ${accent}; margin-bottom: 4px; }
+  .col b { font-size: 12px; }
+  .kv td { padding: 1.5px 0; font-size: 10.5px; vertical-align: top; }
+  .kv td:first-child { color: #666; padding-right: 10px; white-space: nowrap; }
+  table.items { width: 100%; border-collapse: collapse; margin-top: 4px; }
+  table.items th { background: ${thBg}; color: #fff; font-size: 9.5px; text-transform: uppercase;
+                   letter-spacing: .4px; padding: 6px 7px; text-align: left;
+                   border: ${(!isLedger && !isExec) ? '1px solid #000' : 'none'}; }
+  table.items td { border: ${(!isLedger && !isExec) ? '1px solid #000' : 'none'};
+                   border-bottom: 1px solid #e5e5e5; padding: 5px 7px; font-size: 10.5px;
+                   background: ${isExec ? '#FFFEFA' : '#fff'}; }
+  table.items .sub { font-size: 9px; color: #777; }
+  .r { text-align: right; } .c { text-align: center; }
+  table.items th.r { text-align: right; } table.items th.c { text-align: center; }
+  .bottom { display: flex; gap: 16px; margin-top: 10px; align-items: flex-start; }
+  .totals { margin-left: auto; width: 240px; border-collapse: collapse; }
+  .totals td { padding: 3px 7px; font-size: 11px; border-bottom: 1px solid #eee; }
+  .totals .grand td { background: ${grandBg}; color: #fff; font-weight: 700; font-size: 12px; border: 0; }
+  .words { margin-top: 8px; padding: 7px 9px; background: ${wordsBg}; border-left: 3px solid ${accent};
+           font-size: 10.5px; font-style: italic; }
+  .foot { display: flex; gap: 12px; margin-top: 12px; align-items: stretch; }
+  .box { flex: 1; border: ${borderStyle}; border-radius: ${r}; padding: 8px 10px; background: #fff; }
+  .box h3 { font-size: 9px; text-transform: uppercase; letter-spacing: .7px; color: ${accent}; margin-bottom: 4px; }
+  .terms { white-space: pre-wrap; font-size: 10px; color: #444; }
+  .sign { text-align: right; display: flex; flex-direction: column; justify-content: flex-end; }
+  .sign .line { margin-top: 36px; border-top: 1px solid #999; padding-top: 4px; font-size: 10px; }
+  .cancel { position: fixed; top: 40%; left: 0; right: 0; text-align: center; font-size: 64px;
+            color: rgba(200,30,30,.18); font-weight: 800; transform: rotate(-18deg); letter-spacing: 6px; }
+  .fmt-tag { text-align: right; font-size: 9px; color: #888; margin-top: 10px; letter-spacing: .2px; }
+  @media print { body { padding: 0; } }
+</style></head><body data-pdf-format="${esc(fmt)}">
+${voucher.is_cancelled ? '<div class="cancel">CANCELLED</div>' : ''}
+${bodyHtml}
+<div class="fmt-tag">Layout: ${esc(formatLabel)}</div>
 </body></html>`;
+}
+
+function mountHtmlFrame(html, { width = 794, height = 1123, visible = false } = {}) {
+  const frame = document.createElement('iframe');
+  frame.setAttribute('title', 'document-render');
+  frame.style.cssText = visible
+    ? 'border:0;width:100%;height:100%;background:#fff;'
+    : `position:fixed;left:-12000px;top:0;width:${width}px;height:${height}px;border:0;opacity:0;pointer-events:none;`;
+  document.body.appendChild(frame);
+  const doc = frame.contentDocument || frame.contentWindow.document;
+  doc.open();
+  doc.write(html);
+  doc.close();
+  return frame;
+}
+
+async function waitForFrameReady(frame) {
+  const doc = frame.contentDocument || frame.contentWindow.document;
+  const imgs = Array.from(doc.images || []);
+  await Promise.all(imgs.map(img => (img.complete
+    ? null
+    : new Promise(r => { img.onload = r; img.onerror = r; }))));
+  await new Promise(r => setTimeout(r, 80));
+}
+
+/**
+ * Render settings-layout HTML to a real PDF blob (html2canvas + jsPDF).
+ * @param {string} html
+ * @param {{ thermalPaperWidth?: 80|58|null }} [opts]
+ */
+export async function htmlToPdfBlob(html, opts = {}) {
+  const [{ default: html2canvas }, { jsPDF }] = await Promise.all([
+    import('html2canvas'),
+    import('jspdf'),
+  ]);
+  const thermalW = opts.thermalPaperWidth === 58 || opts.thermalPaperWidth === 80
+    ? opts.thermalPaperWidth
+    : null;
+  const frameW = thermalW === 58 ? 220 : thermalW === 80 ? 300 : 794;
+  const frame = mountHtmlFrame(html, { width: frameW, height: thermalW ? 2400 : 1123 });
+  try {
+    await waitForFrameReady(frame);
+    const doc = frame.contentDocument || frame.contentWindow.document;
+    const target = doc.body || doc.documentElement;
+    const canvas = await html2canvas(target, {
+      scale: 2,
+      useCORS: true,
+      allowTaint: true,
+      backgroundColor: '#ffffff',
+      windowWidth: Math.max(target.scrollWidth || frameW, frameW),
+      windowHeight: Math.max(target.scrollHeight || 1123, thermalW ? 400 : 1123),
+    });
+    if (thermalW) {
+      const pageW = thermalW;
+      const imgW = pageW - 2;
+      const imgH = (canvas.height * imgW) / canvas.width;
+      const pageH = Math.min(Math.max(imgH + 4, 80), 2000);
+      const pdf = new jsPDF({ unit: 'mm', format: [pageW, pageH], orientation: 'portrait' });
+      const imgData = canvas.toDataURL('image/jpeg', 0.92);
+      let heightLeft = imgH;
+      let position = 1;
+      pdf.addImage(imgData, 'JPEG', 1, position, imgW, imgH);
+      heightLeft -= (pageH - 2);
+      while (heightLeft > 2) {
+        position = position - (pageH - 2);
+        pdf.addPage([pageW, pageH]);
+        pdf.addImage(imgData, 'JPEG', 1, position, imgW, imgH);
+        heightLeft -= (pageH - 2);
+      }
+      return pdf.output('blob');
+    }
+
+    const pdf = new jsPDF({ unit: 'mm', format: 'a4', orientation: 'portrait' });
+    const pageW = pdf.internal.pageSize.getWidth();
+    const pageH = pdf.internal.pageSize.getHeight();
+    const imgW = pageW;
+    const imgH = (canvas.height * pageW) / canvas.width;
+    const imgData = canvas.toDataURL('image/jpeg', 0.92);
+    let heightLeft = imgH;
+    let position = 0;
+    pdf.addImage(imgData, 'JPEG', 0, position, imgW, imgH);
+    heightLeft -= pageH;
+    while (heightLeft > 0) {
+      position -= pageH;
+      pdf.addPage();
+      pdf.addImage(imgData, 'JPEG', 0, position, imgW, imgH);
+      heightLeft -= pageH;
+    }
+    return pdf.output('blob');
+  } finally {
+    frame.remove();
+  }
+}
+
+/** @deprecated Prefer inline PdfHtmlPreviewOverlay — kept for rare fallbacks. */
+export function openPdfPreview(html, title = 'Document preview') {
+  const blob = new Blob([html], { type: 'text/html;charset=utf-8' });
+  const url = URL.createObjectURL(blob);
+  const w = window.open(url, '_blank', 'noopener,noreferrer');
+  if (!w) {
+    URL.revokeObjectURL(url);
+    throw new Error('Popup blocked — allow popups to preview the PDF');
+  }
+  try { w.document.title = title; } catch { /* ignore */ }
+  setTimeout(() => URL.revokeObjectURL(url), 60_000);
+}
+
+/** Download HTML as a printable .html file (legacy fallback). */
+export function downloadPdfHtml(html, filename = 'document.html') {
+  const blob = new Blob([html], { type: 'text/html;charset=utf-8' });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = filename;
+  a.click();
+  setTimeout(() => URL.revokeObjectURL(url), 2000);
 }
 
 /* ── Print runner: hidden iframe keeps the app page untouched ────────────── */
 export function printInvoice(html) {
-  const frame = document.createElement('iframe');
-  frame.style.cssText = 'position:fixed;width:0;height:0;border:0;visibility:hidden;';
-  document.body.appendChild(frame);
-  const doc = frame.contentDocument || frame.contentWindow.document;
-  doc.open(); doc.write(html); doc.close();
+  const frame = mountHtmlFrame(html);
   const cleanup = () => setTimeout(() => frame.remove(), 500);
   frame.contentWindow.onafterprint = cleanup;
-  // Wait for images (logo) to load before printing.
-  const imgs = Array.from(doc.images || []);
-  const ready = Promise.all(imgs.map(img => img.complete ? null
-    : new Promise(r => { img.onload = r; img.onerror = r; })));
-  ready.then(() => setTimeout(() => {
+  waitForFrameReady(frame).then(() => {
     try { frame.contentWindow.focus(); frame.contentWindow.print(); }
     catch { cleanup(); }
-  }, 50));
+  });
   // Safety cleanup if afterprint never fires (some browsers).
   setTimeout(() => { if (document.body.contains(frame)) frame.remove(); }, 60000);
 }

@@ -47,7 +47,7 @@ Source: `src/App.jsx` (Web Portal 3.0 routes, Vite)
 | /financials/loans-ods | → /kpi/loans-ods |
 | /financials/cashflow | → /cashflow-report |
 | /cashflow-report | src/pages/CashflowReport.jsx — full-screen cashflow (`GET /api/cashflow`) |
-| /document/:id | src/pages/DocumentViewer.jsx — GUID or TDK ref; `?preview=1` post-create |
+| /document/:id | src/pages/DocumentViewer.jsx — cream sheet + Preview / Share PDF / Print PDF (`?preview=1` post-create) |
 | /compliance | → /compliance/gst |
 | /compliance/gst | src/pages/compliance.jsx — gst-summary + `/api/reports/gst` + unmatched |
 | /compliance/alerts | src/pages/compliance.jsx — `GET /api/alerts` |
@@ -76,8 +76,7 @@ Source: `src/App.jsx` (Web Portal 3.0 routes, Vite)
 |------|----------------|
 | Sales / Purchase / Voucher creates | src/components/create/voucherForms.jsx + accountingForms.jsx |
 | Ledger: sundry-creditor, sundry-debtor, duties-taxes, custom-group | src/components/create/masterForms.jsx (PartyForm / LedgerForm) |
-| Inventory: stock-item (Add Item), warehouse (Add Warehouse) | src/components/create/masterForms.jsx |
-| Stock transfer / adjustment | Still in CreateDrawer forms map; opened from inventory flows if needed |
+| Inventory: stock-item, warehouse, stock-edit, stock-transfer, stock-adjustment | src/components/create/masterForms.jsx |
 
 ## Layout Components
 | Component | File | Purpose |

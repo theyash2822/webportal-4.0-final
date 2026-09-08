@@ -1,11 +1,15 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { useNavigate, useParams, useSearchParams } from 'react-router-dom';
-import { ArrowLeft, Printer, Share2 } from 'lucide-react';
-import { Button, Empty, Panel, Skeleton, useLabelT } from '../components/kit';
+import { ArrowLeft, X } from 'lucide-react';
+import { Button, Empty, Skeleton, useLabelT } from '../components/kit';
 import { useAuth } from '../contexts/AuthContext';
 import { useFmt } from './shared';
 import api from '../services/api';
-import { buildInvoiceHTML, printInvoice } from '../utils/invoicePrint';
+import CreamDocumentSheet from '../components/CreamDocumentSheet';
+import { buildCreamModel } from '../utils/creamPreviewModel';
+import { buildVoucherPdfHtml } from '../utils/voucherPdfBuild';
+import { printInvoice, htmlToPdfBlob } from '../utils/invoicePrint';
+import { downloadBlob } from '../services/invoicePdf';
 import wsService from '../services/websocket';
 
 const isTdkRef = id => /^TD/i.test(String(id || '').trim());
@@ -17,13 +21,15 @@ export default function DocumentViewer() {
   const previewMode = search.get('preview') === '1';
   const lt = useLabelT();
   const navigate = useNavigate();
-  const { money, date } = useFmt();
+  const { date, money } = useFmt();
   const { selectedCompany } = useAuth();
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
-  const [html, setHtml] = useState('');
-  const [meta, setMeta] = useState(null);
-  const [busy, setBusy] = useState('');
+  const [actionBusy, setActionBusy] = useState('');
+  const [actionError, setActionError] = useState('');
+  const [snapshot, setSnapshot] = useState(null);
+  const [full, setFull] = useState(null);
+  const [row, setRow] = useState(null);
   const tdkRefRef = useRef('');
   const reqRef = useRef(0);
 
@@ -33,13 +39,15 @@ export default function DocumentViewer() {
     const seq = ++reqRef.current;
     setLoading(true);
     setError('');
-    setHtml('');
+    setSnapshot(null);
+    setFull(null);
     try {
       let tdkRef = isTdkRef(id) ? id.trim() : '';
       let voucher = null;
       if (!tdkRef && isGuidLike(id)) {
         const res = await api.fetchVoucherFull(guid, id);
         voucher = res?.data?.voucher || res?.data || {};
+        setFull(res?.data || {});
         tdkRef = voucher.tdk_reference_no || voucher.tdkRef || voucher.reference || '';
       }
       if (!tdkRef && !isGuidLike(id)) tdkRef = id;
@@ -48,31 +56,10 @@ export default function DocumentViewer() {
       if (tdkRef) {
         const res = await api.fetchTallyInvoicePreview(tdkRef, guid);
         if (seq !== reqRef.current) return;
-        const doc = res?.data || res || {};
-        setMeta({ title: doc.documentNumber || doc.voucherNumber || tdkRef, type: doc.documentTitle || doc.tallyVoucherType || 'Document', tdkRef });
-        const previewItems = (doc.items || []).map((it, i) => ({
-          id: i, name: it.name || it.itemName, hsn: it.hsn, qty: it.qty ?? it.billedQty, unit: it.unit, rate: it.rate, amount: it.amount ?? it.lineTotal,
-        }));
-        setHtml(buildInvoiceHTML({
-          voucher: {
-            voucher_number: doc.documentNumber || doc.voucherNumber || tdkRef,
-            voucher_type: doc.tallyVoucherType || doc.documentTitle || 'Voucher',
-            date: doc.date, amount: doc.totals?.grandTotal ?? doc.totals?.total,
-            party_amount: doc.totals?.grandTotal, reference: doc.reference || tdkRef, narration: doc.narration,
-          },
-          company: doc.company || selectedCompany,
-          party: doc.party || doc.billing || { name: doc.partyName },
-          items: previewItems,
-          ledgerEntries: doc.ledgerEntries || [],
-          formatDate: date,
-        }));
+        setSnapshot(res?.data || res || {});
+        setRow(voucher || { voucher_number: tdkRef, reference: tdkRef });
       } else if (voucher) {
-        setMeta({ title: voucher.voucher_number, type: voucher.voucher_type, tdkRef: '' });
-        const full = voucher;
-        setHtml(buildInvoiceHTML({
-          voucher: full, company: selectedCompany, party: { name: full.party_name },
-          items: full.items || [], ledgerEntries: full.ledger_entries || [], formatDate: date,
-        }));
+        setRow(voucher);
       } else {
         throw new Error('Could not resolve document');
       }
@@ -82,7 +69,7 @@ export default function DocumentViewer() {
     } finally {
       if (seq === reqRef.current) setLoading(false);
     }
-  }, [id, selectedCompany, date]);
+  }, [id, selectedCompany]);
 
   useEffect(() => { load(); }, [load]);
 
@@ -94,49 +81,87 @@ export default function DocumentViewer() {
     return un;
   }, [id, load]);
 
-  const sharePdf = async () => {
-    const tdk = tdkRefRef.current;
-    if (!tdk || !selectedCompany?.guid) return;
-    setBusy('share');
+  const cream = buildCreamModel({
+    doc: snapshot,
+    row,
+    full,
+    company: selectedCompany,
+    formatDate: date,
+  });
+
+  const runPdf = async (mode) => {
+    setActionBusy(mode);
+    setActionError('');
     try {
-      await api.shareTallyInvoicePdf(tdk, { companyGuid: selectedCompany.guid });
-      window.open(`https://wa.me/?text=${encodeURIComponent(`${meta?.type || 'Document'} ${meta?.title || tdk}`)}`, '_blank', 'noopener');
+      const { html, filename, thermalPaperWidth } = await buildVoucherPdfHtml({
+        cream, doc: snapshot, row, full, company: selectedCompany, formatDate: date,
+      });
+      if (mode === 'print') {
+        printInvoice(html);
+      } else {
+        if (tdkRefRef.current && selectedCompany?.guid) {
+          try {
+            await api.shareTallyInvoicePdf(tdkRefRef.current, { companyGuid: selectedCompany.guid });
+          } catch { /* local PDF still shared */ }
+        }
+        const blob = await htmlToPdfBlob(html, { thermalPaperWidth });
+        const party = cream.partyName || row?.party_name || '';
+        const text = [cream.voucherType || row?.voucher_type || 'Invoice', cream.number || row?.voucher_number, party]
+          .filter(Boolean).join(' · ');
+        const file = new File([blob], filename, { type: 'application/pdf' });
+        if (navigator.canShare?.({ files: [file] })) {
+          try {
+            await navigator.share({ files: [file], text });
+          } catch (e) {
+            if (e?.name !== 'AbortError') downloadBlob(blob, filename);
+          }
+        } else {
+          downloadBlob(blob, filename);
+        }
+      }
     } catch (e) {
-      setError(e?.message || 'Share failed');
+      setActionError(e?.message || lt('Unable to prepare PDF'));
     } finally {
-      setBusy('');
+      setActionBusy('');
     }
   };
 
   return (
-    <div className="mx-auto max-w-4xl py-6" data-testid="document-viewer">
-      <div className="mb-6 flex flex-wrap items-center justify-between gap-3">
-        <div className="flex items-center gap-3">
+    <div className="mx-auto max-w-3xl py-6" data-testid="document-viewer">
+      <div className="mb-5 flex flex-wrap items-start justify-between gap-3">
+        <div className="flex items-start gap-3">
           <Button onClick={() => navigate(-1)} data-testid="document-back"><ArrowLeft size={14} /> {lt('Back')}</Button>
           <div>
-            <h1 className="text-lg font-bold text-ink">{meta?.title || id}</h1>
-            <p className="text-[13px] text-ink-soft">{meta?.type}{previewMode ? ` · ${lt('Post-create preview')}` : ''}</p>
+            <p className="text-[10px] font-semibold uppercase tracking-wide text-ink-faint">{lt('Record')}</p>
+            <h1 className="text-lg font-bold text-ink">{cream.number || id}</h1>
+            <p className="text-[13px] text-ink-soft">
+              {cream.voucherType}{cream.dateLabel ? ` · ${cream.dateLabel}` : ''}
+              {previewMode ? ` · ${lt('Post-create')}` : ''}
+            </p>
           </div>
         </div>
-        <div className="flex flex-wrap gap-2">
-          {tdkRefRef.current && (
-            <Button disabled={!!busy} onClick={sharePdf} data-testid="document-share-pdf">
-              <Share2 size={14} /> {busy === 'share' ? lt('Sharing…') : lt('Share PDF (Tally)')}
-            </Button>
-          )}
-          {html && (
-            <Button variant="primary" onClick={() => printInvoice(html)} data-testid="document-print">
-              <Printer size={14} /> {lt('Print / PDF')}
-            </Button>
-          )}
-        </div>
+        <Button variant="ghost" onClick={() => navigate(-1)} data-testid="document-close" aria-label={lt('Close')}>
+          <X size={16} />
+        </Button>
       </div>
+
       {loading && <Skeleton rows={10} />}
       {error && !loading && <Empty message={error} hint={<Button onClick={load}>{lt('Retry')}</Button>} />}
-      {html && !loading && (
-        <Panel title={lt('Document preview')} sub={lt('Universal viewer — GUID or TDK ref')}>
-          <iframe title={lt('Document')} data-testid="document-preview-frame" className="h-[min(80vh,720px)] w-full rounded-xl border border-line bg-white" srcDoc={html} sandbox="allow-same-origin" />
-        </Panel>
+      {actionError && <Empty message={actionError} hint={<Button onClick={() => setActionError('')}>{lt('Dismiss')}</Button>} />}
+
+      {!loading && !error && (
+        <div className="space-y-4">
+          <CreamDocumentSheet model={cream} />
+          <div className="flex flex-wrap gap-2 rounded-2xl border border-line bg-paper p-3">
+            <Button data-testid="document-share-pdf" disabled={!!actionBusy} onClick={() => runPdf('share')}>
+              {actionBusy === 'share' ? lt('Preparing…') : lt('Share PDF')}
+            </Button>
+            <Button variant="primary" data-testid="document-print-pdf" disabled={!!actionBusy} onClick={() => runPdf('print')}>
+              {actionBusy === 'print' ? lt('Preparing…') : lt('Print PDF')}
+            </Button>
+            <span className="ml-auto self-center text-[12px] tabular text-ink-soft">{money(cream.total)}</span>
+          </div>
+        </div>
       )}
     </div>
   );

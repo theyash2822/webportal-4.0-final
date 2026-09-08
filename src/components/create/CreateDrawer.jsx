@@ -14,7 +14,7 @@ import {
   CreditNoteForm, DebitNoteForm, DeliveryNoteForm, QuotationNotice,
 } from './voucherForms';
 import { PaymentForm, ReceiptForm, JournalForm, ContraForm, ExpenseForm } from './accountingForms';
-import { PartyForm, LedgerForm, StockItemForm, WarehouseForm, StockTransferForm, StockAdjustmentForm } from './masterForms';
+import { PartyForm, LedgerForm, StockItemForm, WarehouseForm, StockEditForm, StockTransferForm, StockAdjustmentForm } from './masterForms';
 
 const FORMS = {
   'sales-invoice':    { title: 'Create Invoice',   Comp: SalesInvoiceForm },
@@ -42,6 +42,7 @@ const FORMS = {
   'ledger':           { title: 'Custom Group',     Comp: LedgerForm },
   'stock-item':       { title: 'Add Item',         Comp: StockItemForm },
   'warehouse':        { title: 'Add Warehouse',    Comp: WarehouseForm },
+  'stock-edit':       { title: 'Stock Edit',       Comp: StockEditForm },
   'stock-transfer':   { title: 'Stock Transfer',   Comp: StockTransferForm },
   'stock-adjustment': { title: 'Stock Adjustment', Comp: StockAdjustmentForm },
 };
