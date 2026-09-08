@@ -4,6 +4,18 @@ Format: Date | Task | Files Changed | Behavior Changed | Tested | Risks
 
 ---
 
+## 2026-09-08 | Publish hardening: PDF correctness + privacy + auth storage
+Files changed: `creamPreviewModel.js`, `voucherConfig.js`, `voucherPdfBuild.js`, `sanitizeImageSrc.js`, `authStorage.js`, `AuthContext.jsx`, `api.js`, `invoicePrint.js`, `thermalPrint.js`, `VoucherConfigPanel.jsx`, Settings/compliance/websocket/SettingsContext, `package.json` (qrcode)
+- Print payload uses `row.ledger_entries` + signed `dr_cr` amounts (Thermal Dr/Cr).
+- QR generated client-side (`qrcode`); removed `api.qrserver.com`.
+- `td_voucher_config` local cache stores only format + thermal width (no bank/UPI/QR).
+- Logo/QR `<img src>` sanitized (`data:image/*` + https, reject private/http/javascript).
+- Share/Print auto-loads bank ledgers when banks not passed.
+- Bearer token moved off `localStorage` → memory + `sessionStorage` + BroadcastChannel multi-tab (HttpOnly cookies still need backend).
+Tested: `vite build` GREEN; unit checks for ledger sign, sanitize, local QR, cache strip.
+
+---
+
 ## 2026-09-08 | QA + push cream/Thermal voucher work to cursor
 Files changed: (commit `30b13d2`) cream drawer, Thermal PDF, voucher config, inventory restore
 - QA: `vite build` GREEN. Repo-wide eslint still noisy (pre-existing); changed-file lint mostly legacy shared.jsx/AppShell hooks.

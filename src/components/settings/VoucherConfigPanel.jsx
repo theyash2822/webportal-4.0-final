@@ -20,6 +20,22 @@ import {
 } from '../../utils/voucherConfig';
 import { persistVoucherConfigs } from '../../utils/voucherPdfBuild';
 import { buildThermalHTML } from '../../utils/thermalPrint';
+import { sanitizeImageSrc } from '../../utils/sanitizeImageSrc';
+
+function GeneratedQrPreview({ cfg }) {
+  const [src, setSrc] = useState(null);
+  useEffect(() => {
+    let cancelled = false;
+    setSrc(null);
+    if (!cfg?.qrEnabled || cfg?.qrImage) return undefined;
+    qrDataUrlFromConfig(cfg).then(url => {
+      if (!cancelled) setSrc(url);
+    });
+    return () => { cancelled = true; };
+  }, [cfg?.qrEnabled, cfg?.qrType, cfg?.qrUpiId, cfg?.qrUrl, cfg?.qrIfsc, cfg?.qrAccount, cfg?.qrImage]);
+  if (!src) return null;
+  return <img src={src} alt="QR preview" className="h-24 w-24 rounded border border-line" />;
+}
 
 function FormatThumb({ type }) {
   const resolved = resolveDocumentFormat(type);
@@ -234,12 +250,13 @@ export default function VoucherConfigPanel() {
     if (!file) return;
     const reader = new FileReader();
     reader.onload = () => {
-      update(id, 'qrImage', typeof reader.result === 'string' ? reader.result : null);
+      const safe = sanitizeImageSrc(typeof reader.result === 'string' ? reader.result : null);
+      update(id, 'qrImage', safe);
     };
     reader.readAsDataURL(file);
   };
 
-  const sampleHtmlFor = (id) => {
+  const sampleHtmlFor = async (id) => {
     const cfg = configs[id] || defaultAllVoucherConfigs()[id];
     const fmt = resolveDocumentFormat(cfg.format);
     const label = VOUCHER_TYPES.find(t => t.id === id)?.label || 'Invoice';
@@ -276,14 +293,15 @@ export default function VoucherConfigPanel() {
           { ledger_name: 'Output SGST', amount: 990 },
         ],
       profile,
-      logoUrl: logoRef.current || '',
+      logoUrl: sanitizeImageSrc(logoRef.current) || '',
       formatDate: d => d,
       format: fmt,
     };
     if (isThermalTemplateId(fmt)) {
+      const qrImage = cfg.qrEnabled ? await qrDataUrlFromConfig(cfg) : null;
       return buildThermalHTML(payload, {
         paperWidth: normalizeThermalWidth(cfg.thermalPaperWidth),
-        qrImage: cfg.qrEnabled ? qrDataUrlFromConfig(cfg) : null,
+        qrImage,
       });
     }
     return buildInvoiceHTML(payload);
@@ -294,7 +312,7 @@ export default function VoucherConfigPanel() {
     setMsg('');
     try {
       setPreviewTitle(`${label} · ${lt('PDF Preview')}`);
-      setPreviewHtml(sampleHtmlFor(id));
+      setPreviewHtml(await sampleHtmlFor(id));
     } catch (e) {
       setMsg(e?.message || lt('Could not generate preview'));
     } finally {
@@ -504,7 +522,6 @@ export default function VoucherConfigPanel() {
         const cfg = configs[vt.id] || defaultAllVoucherConfigs()[vt.id];
         const isOpen = expanded === vt.id;
         const fmt = resolveDocumentFormat(cfg.format);
-        const qrPreview = cfg.qrEnabled ? qrDataUrlFromConfig(cfg) : null;
 
         return (
           <Card key={vt.id} className="overflow-hidden p-0" data-testid={`voucher-config-section-${vt.id}`}>
@@ -676,9 +693,7 @@ export default function VoucherConfigPanel() {
                         </label>
                       )}
 
-                      {!cfg.qrImage && qrPreview && (
-                        <img src={qrPreview} alt="QR preview" className="h-24 w-24 rounded border border-line" />
-                      )}
+                      {!cfg.qrImage && <GeneratedQrPreview cfg={cfg} />}
                     </>
                   )}
                 </div>

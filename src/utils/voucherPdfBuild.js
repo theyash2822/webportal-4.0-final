@@ -16,6 +16,7 @@ import {
   normalizeThermalWidth,
 } from './voucherConfig';
 import { toPrintPayload } from './creamPreviewModel';
+import { sanitizeImageSrc } from './sanitizeImageSrc';
 
 export async function loadVoucherPdfConfig(voucherType) {
   let serverVc = null;
@@ -31,8 +32,18 @@ export async function loadVoucherPdfConfig(voucherType) {
   return { cfg, format, thermalPaperWidth, configId: id, all };
 }
 
+async function loadBanksForPdf(companyGuid) {
+  if (!companyGuid) return [];
+  try {
+    const res = await api.fetchBankLedgers(companyGuid, 'all');
+    return api.unwrapList(res) || [];
+  } catch {
+    return [];
+  }
+}
+
 export async function buildVoucherPdfHtml({
-  cream, doc, row, full, company, formatDate, banks = [],
+  cream, doc, row, full, company, formatDate, banks,
 }) {
   const voucherType = row?.voucher_type
     || full?.voucher?.voucher_type
@@ -40,7 +51,10 @@ export async function buildVoucherPdfHtml({
     || cream?.voucherType
     || 'Sales';
   const { cfg, format, thermalPaperWidth, configId } = await loadVoucherPdfConfig(voucherType);
-  const bank = bankInfoFromConfig(cfg, banks);
+  const bankRows = Array.isArray(banks) && banks.length
+    ? banks
+    : await loadBanksForPdf(company?.guid);
+  const bank = bankInfoFromConfig(cfg, bankRows);
   const [profileRes, logoRes] = await Promise.allSettled([
     company?.guid ? api.fetchPrintProfile(company.guid) : Promise.resolve({}),
     company?.guid ? api.fetchCompanyLogo(company.guid) : Promise.resolve({}),
@@ -54,15 +68,17 @@ export async function buildVoucherPdfHtml({
       || profileRes.value?.data?.declarationText
       || '',
   };
-  const logoUrl = logoRes.status === 'fulfilled' ? (logoRes.value?.data?.logo_url || '') : '';
+  const rawLogo = logoRes.status === 'fulfilled' ? (logoRes.value?.data?.logo_url || '') : '';
+  const logoUrl = sanitizeImageSrc(rawLogo) || '';
   const payload = toPrintPayload({
     cream, doc, row, full, company, formatDate, profile, logoUrl, format,
   });
   const formatLabel = FORMAT_OPTIONS.find(f => f.id === format)?.label || format;
-  const qrImage = cfg.qrEnabled ? qrDataUrlFromConfig(cfg) : null;
+  const qrImage = cfg.qrEnabled ? await qrDataUrlFromConfig(cfg) : null;
+  const safeQr = sanitizeImageSrc(qrImage);
 
   const html = isThermalTemplateId(format)
-    ? buildThermalHTML(payload, { paperWidth: thermalPaperWidth, qrImage })
+    ? buildThermalHTML(payload, { paperWidth: thermalPaperWidth, qrImage: safeQr })
     : buildInvoiceHTML(payload);
 
   return {

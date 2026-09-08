@@ -5,6 +5,7 @@ import { useAuth } from '../contexts/AuthContext';
 import { StatGrid, Button, Panel, DataTable, TableFilter, Pill, Status, Tabs, Modal, Field, Input, Select, ModuleView, Empty, Skeleton, useLabelT } from '../components/kit';
 import { useFmt, RecordDrawer, useVoucherSelection, BulkActionBar, voucherRowKey } from './shared';
 import { useSalesContext } from '../contexts/SalesContext';
+import { getAuthToken } from '../utils/authStorage';
 
 const number = value => Number(value || 0);
 const dataOf = res => res?.data ?? res?.result ?? res ?? {};
@@ -20,7 +21,7 @@ function queryPath(path, guid, fy, extra = {}) {
 
 async function rootPost(path, body) {
   const headers = { 'Content-Type': 'application/json' };
-  const token = localStorage.getItem('authToken');
+  const token = getAuthToken();
   if (token) headers.Authorization = `Bearer ${token}`;
   const res = await fetch(`${API_ROOT}${path}`, { method: 'POST', headers, body: JSON.stringify(body) });
   const payload = await res.json().catch(() => ({}));

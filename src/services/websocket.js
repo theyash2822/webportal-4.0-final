@@ -3,6 +3,7 @@
 
 import { io } from 'socket.io-client';
 import { WS_URL } from './api';
+import { getAuthToken } from '../utils/authStorage';
 
 class WebSocketService {
   constructor() {
@@ -27,7 +28,7 @@ class WebSocketService {
     });
 
     this.socket.on('reconnect', () => {
-      const t = localStorage.getItem('authToken');
+      const t = getAuthToken();
       if (t) this.socket.emit('register', { token: t, type: 'web' });
     });
 

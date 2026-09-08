@@ -14,6 +14,7 @@ import { LANGUAGES } from '../i18n';
 import VoucherConfigPanel from '../components/settings/VoucherConfigPanel';
 import { registerWebPushToken, getPushPermissionStatus } from '../services/push';
 import { clearOnboardingForReplay } from '../utils/onboardingNav';
+import { getAuthToken } from '../utils/authStorage';
 
 function Section({ title, sub, children, actions, testid, translated = false }) {
   const lt = useLabelT();
@@ -33,7 +34,7 @@ function Section({ title, sub, children, actions, testid, translated = false }) 
 
 async function rootRequest(method, path, body) {
   const headers = { 'Content-Type': 'application/json' };
-  const token = localStorage.getItem('authToken');
+  const token = getAuthToken();
   if (token) headers.Authorization = `Bearer ${token}`;
   const response = await fetch(`${API_ROOT}${path}`, {
     method,

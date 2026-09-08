@@ -1,9 +1,11 @@
 /** Voucher PDF config — mirrors mobile `app/settings/voucher-config.tsx`. */
+import QRCode from 'qrcode';
 import {
   DEFAULT_THERMAL_PAPER_WIDTH,
   isThermalTemplateId,
   normalizeThermalWidth,
 } from './thermalShared';
+import { sanitizeImageSrc } from './sanitizeImageSrc';
 
 export { isThermalTemplateId, normalizeThermalWidth, DEFAULT_THERMAL_PAPER_WIDTH };
 
@@ -100,12 +102,34 @@ export function mergeVoucherConfigs(parsed) {
 
 const VOUCHER_CONFIG_LOCAL_KEY = 'td_voucher_config';
 
+/** Only non-sensitive layout prefs belong in localStorage (no bank/UPI/QR). */
+export function toLocalVoucherConfigCache(configs) {
+  if (!configs || typeof configs !== 'object') return {};
+  const out = {};
+  Object.keys(configs).forEach(k => {
+    const c = configs[k];
+    if (!c || typeof c !== 'object') return;
+    out[k] = {
+      format: resolveDocumentFormat(c.format),
+      thermalPaperWidth: normalizeThermalWidth(c.thermalPaperWidth),
+      ...(c._updatedAt != null ? { _updatedAt: c._updatedAt } : {}),
+    };
+  });
+  return out;
+}
+
 export function readLocalVoucherConfig() {
   try {
     const raw = localStorage.getItem(VOUCHER_CONFIG_LOCAL_KEY);
     if (!raw) return null;
     const parsed = JSON.parse(raw);
-    return parsed && typeof parsed === 'object' ? parsed : null;
+    if (!parsed || typeof parsed !== 'object') return null;
+    const cleaned = toLocalVoucherConfigCache(parsed);
+    // Rewrite if legacy cache still held bank/UPI/QR fields.
+    if (JSON.stringify(parsed) !== JSON.stringify(cleaned)) {
+      writeLocalVoucherConfig(cleaned);
+    }
+    return cleaned;
   } catch {
     return null;
   }
@@ -113,7 +137,10 @@ export function readLocalVoucherConfig() {
 
 export function writeLocalVoucherConfig(configs) {
   try {
-    localStorage.setItem(VOUCHER_CONFIG_LOCAL_KEY, JSON.stringify(configs));
+    localStorage.setItem(
+      VOUCHER_CONFIG_LOCAL_KEY,
+      JSON.stringify(toLocalVoucherConfigCache(configs)),
+    );
   } catch { /* quota / private mode */ }
 }
 
@@ -206,18 +233,29 @@ export function bankInfoFromConfig(cfg, bankRows = []) {
   };
 }
 
-export function qrDataUrlFromConfig(cfg) {
-  if (cfg?.qrImage) return cfg.qrImage;
+function qrPayloadFromConfig(cfg) {
   if (!cfg?.qrEnabled) return null;
-  if (cfg.qrType === 'url' && cfg.qrUrl) {
-    return `https://api.qrserver.com/v1/create-qr-code/?size=120x120&data=${encodeURIComponent(cfg.qrUrl)}`;
-  }
-  if (cfg.qrType === 'upi' && cfg.qrUpiId) {
-    return `https://api.qrserver.com/v1/create-qr-code/?size=120x120&data=${encodeURIComponent(`upi://pay?pa=${cfg.qrUpiId}`)}`;
-  }
+  if (cfg.qrType === 'url' && cfg.qrUrl) return String(cfg.qrUrl);
+  if (cfg.qrType === 'upi' && cfg.qrUpiId) return `upi://pay?pa=${cfg.qrUpiId}`;
   if (cfg.qrType === 'bank' && (cfg.qrIfsc || cfg.qrAccount)) {
-    const data = `Bank IFSC:${cfg.qrIfsc || ''} A/C:${cfg.qrAccount || ''}`;
-    return `https://api.qrserver.com/v1/create-qr-code/?size=120x120&data=${encodeURIComponent(data)}`;
+    return `Bank IFSC:${cfg.qrIfsc || ''} A/C:${cfg.qrAccount || ''}`;
   }
   return null;
+}
+
+/** Client-side QR data URL — never sends UPI/bank data to third parties. */
+export async function qrDataUrlFromConfig(cfg) {
+  const uploaded = sanitizeImageSrc(cfg?.qrImage);
+  if (uploaded) return uploaded;
+  const payload = qrPayloadFromConfig(cfg);
+  if (!payload) return null;
+  try {
+    return await QRCode.toDataURL(payload, {
+      width: 120,
+      margin: 1,
+      errorCorrectionLevel: 'M',
+    });
+  } catch {
+    return null;
+  }
 }

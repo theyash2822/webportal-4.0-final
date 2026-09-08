@@ -3,6 +3,7 @@
  * Consumes the same print payload as buildInvoiceHTML (toPrintPayload shape).
  */
 import { amountInWords } from './invoicePrint';
+import { sanitizeImageSrc } from './sanitizeImageSrc';
 import {
   DEFAULT_THERMAL_PAPER_WIDTH,
   normalizeThermalWidth,
@@ -87,7 +88,7 @@ export function buildThermalHTML(payload = {}, opts = {}) {
   }
   return wrapThermalHtml(renderCommercial({
     voucher, company, party, gst, items, ledgerEntries, eInvoice, eWayBill, profile, formatDate,
-    qrImage: opts.qrImage,
+    qrImage: sanitizeImageSrc(opts.qrImage),
   }, w), { paperWidth: w });
 }
 

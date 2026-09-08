@@ -2,10 +2,11 @@
 // Auth + live reads: /api/* (mobile V2). Legacy writes: /app/*.
 
 import { API_ROOT, BASE_URL, WS_URL } from './config.js';
+import { getAuthToken } from '../utils/authStorage.js';
 
 const TALLY_BASE = API_ROOT;
 
-const getToken = () => localStorage.getItem('authToken');
+const getToken = () => getAuthToken();
 
 // ─── Core request (/app/*) ───────────────────────────────────────────────────
 async function request(method, endpoint, body = null, skipAuth = false, bearer = null) {

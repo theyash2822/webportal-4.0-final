@@ -11,12 +11,20 @@ import api, {
 import wsService from '../services/websocket';
 import { invalidateStockCache } from '../utils/stockCache';
 import { tryAutoRegisterPush } from '../services/push';
+import {
+  getAuthToken,
+  setAuthToken,
+  clearAuthToken,
+  requestAuthTokenFromPeers,
+  AUTH_TOKEN_EVENT,
+} from '../utils/authStorage';
 
 const AuthContext = createContext(null);
 
 (function cleanStaleToken() {
-  const t = localStorage.getItem('authToken');
+  const t = getAuthToken();
   if (t && t.startsWith('demo-token-')) {
+    clearAuthToken();
     localStorage.clear();
   }
 })();
@@ -31,7 +39,7 @@ function pickDefaultFY(company) {
 }
 
 export function AuthProvider({ children }) {
-  const [token,     setToken]     = useState(() => localStorage.getItem('authToken'));
+  const [token,     setToken]     = useState(() => getAuthToken());
   const [user,      setUser]      = useState(() => { try { return JSON.parse(localStorage.getItem('authUser')); } catch { return null; } });
   const [companies, setCompanies] = useState(() => { try { return JSON.parse(localStorage.getItem('companies')) || []; } catch { return []; } });
   const [selectedCompany, setSelectedCompany] = useState(() => { try { return JSON.parse(localStorage.getItem('selectedCompany')); } catch { return null; } });
@@ -46,6 +54,21 @@ export function AuthProvider({ children }) {
   selectedFYRef.current = selectedFY;
   const selectedCompanyRef = useRef(selectedCompany);
   selectedCompanyRef.current = selectedCompany;
+
+  // Multi-tab / migration: pick up tokens written by authStorage (session + BroadcastChannel).
+  useEffect(() => {
+    requestAuthTokenFromPeers();
+    const sync = () => {
+      const next = getAuthToken();
+      setToken(prev => (prev === next ? prev : next));
+    };
+    window.addEventListener(AUTH_TOKEN_EVENT, sync);
+    const t = setTimeout(sync, 120);
+    return () => {
+      window.removeEventListener(AUTH_TOKEN_EVENT, sync);
+      clearTimeout(t);
+    };
+  }, []);
 
   const clearCompaniesState = useCallback(() => {
     localStorage.removeItem('companies');
@@ -233,7 +256,7 @@ export function AuthProvider({ children }) {
         }
       }
 
-      localStorage.setItem('authToken', authToken);
+      setAuthToken(authToken);
       localStorage.setItem('authUser', JSON.stringify(freshUser));
       localStorage.setItem('isPaired', paired ? 'true' : 'false');
 
@@ -258,6 +281,7 @@ export function AuthProvider({ children }) {
       console.warn('[auth] logout API failed:', err?.message || err);
     }
     const pairedState = localStorage.getItem('isPaired');
+    clearAuthToken();
     localStorage.clear();
     if (pairedState) localStorage.setItem('isPaired', pairedState);
     setToken(null); setUser(null); setCompanies([]); setSelectedCompany(null); setSelectedFY(null);

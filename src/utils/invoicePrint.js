@@ -3,6 +3,8 @@
 // breakdown, totals in words, bank details and declaration/terms from the
 // company print profile, then opens the browser print dialog.
 
+import { sanitizeImageSrc } from './sanitizeImageSrc';
+
 /* ── Amount in words (Indian grouping: Crore / Lakh / Thousand) ──────────── */
 const ONES = ['', 'One', 'Two', 'Three', 'Four', 'Five', 'Six', 'Seven', 'Eight', 'Nine', 'Ten',
   'Eleven', 'Twelve', 'Thirteen', 'Fourteen', 'Fifteen', 'Sixteen', 'Seventeen', 'Eighteen', 'Nineteen'];
@@ -92,6 +94,7 @@ export function buildInvoiceHTML({
   profile = {}, logoUrl = '', formatDate = (d) => d || '',
   format = 'tally_classic_v1',
 }) {
+  const safeLogo = sanitizeImageSrc(logoUrl) || '';
   const title = docTitle(voucher.voucher_type);
   const grandTotal = Math.abs(Number(voucher.party_amount ?? voucher.amount) || 0);
   const fmt = String(format || 'tally_classic_v1');
@@ -187,7 +190,7 @@ export function buildInvoiceHTML({
   const formatLabel = isExec ? 'TallyDekho Executive' : isLedger ? 'TallyDekho Ledger' : 'Tally Classic';
 
   const companyBlock = `
-    ${logoUrl ? `<img class="logo" src="${esc(logoUrl)}" alt="logo">` : ''}
+    ${safeLogo ? `<img class="logo" src="${esc(safeLogo)}" alt="logo">` : ''}
     <div>
       <h1>${esc(company.name || company.formal_name || '')}</h1>
       ${compAddr.map(l => `<div class="muted">${esc(l)}</div>`).join('')}

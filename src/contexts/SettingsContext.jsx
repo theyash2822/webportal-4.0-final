@@ -8,6 +8,7 @@ import {
 } from '../utils/format';
 import { USE_MOCK } from '../services/config';
 import i18n, { languageToCode } from '../i18n';
+import { getAuthToken } from '../utils/authStorage';
 
 // Same-origin by default: backend is reverse-proxied at /app on the portal host.
 const API_BASE = import.meta.env.VITE_API_URL || '/app';
@@ -44,7 +45,7 @@ export function SettingsProvider({ children }) {
 
   // Sync from API on mount (skipped in mock mode — local settings are the source)
   useEffect(() => {
-    const token = localStorage.getItem('authToken');
+    const token = getAuthToken();
     if (!token || USE_MOCK) return;
     fetch(`${API_BASE}/user-settings`, {
       headers: { Authorization: `Bearer ${token}` },
@@ -69,7 +70,7 @@ export function SettingsProvider({ children }) {
     const updated = { ...settings, ...partial };
     setSettings(updated);
     localStorage.setItem('userSettings', JSON.stringify(updated));
-    const token = localStorage.getItem('authToken');
+    const token = getAuthToken();
     if (!token || USE_MOCK) return;
     try {
       await fetch(`${API_BASE}/user-settings`, {

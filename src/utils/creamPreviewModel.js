@@ -145,6 +145,40 @@ export function buildCreamModel({ doc, row, full, company: selectedCompany, form
   };
 }
 
+/**
+ * Signed ledger amount for thermal accounting (Dr > 0, Cr < 0).
+ * Prefers explicit debit/credit fields, then dr_cr / is_debit flags.
+ */
+export function signedLedgerAmount(entry = {}) {
+  const debit = Number(entry.debit ?? entry.debit_amount);
+  const credit = Number(entry.credit ?? entry.credit_amount);
+  if (Number.isFinite(debit) && debit !== 0 && !(Number.isFinite(credit) && credit !== 0)) {
+    return Math.abs(debit);
+  }
+  if (Number.isFinite(credit) && credit !== 0 && !(Number.isFinite(debit) && debit !== 0)) {
+    return -Math.abs(credit);
+  }
+  if (Number.isFinite(debit) && Number.isFinite(credit) && (debit !== 0 || credit !== 0)) {
+    return Math.abs(debit) - Math.abs(credit);
+  }
+  const raw = Number(entry.amount);
+  if (!Number.isFinite(raw)) return 0;
+  const side = String(entry.dr_cr || entry.drCr || entry.type || '').trim().toLowerCase();
+  if (side === 'cr' || side === 'credit' || side === 'c') return -Math.abs(raw);
+  if (side === 'dr' || side === 'debit' || side === 'd') return Math.abs(raw);
+  if (entry.is_credit === true || entry.isCredit === true) return -Math.abs(raw);
+  if (entry.is_debit === true || entry.isDebit === true) return Math.abs(raw);
+  return raw;
+}
+
+function mapPrintLedgerEntries(snapshot, full, row) {
+  const src = snapshot.ledgerEntries || full?.ledger_entries || row?.ledger_entries || [];
+  return (src || []).map(e => ({
+    ledger_name: e.ledgerName || e.ledger_name || e.name,
+    amount: signedLedgerAmount(e),
+  }));
+}
+
 /** Map cream/snapshot inputs into buildInvoiceHTML args. */
 export function toPrintPayload({ cream, doc, row, full, company: selectedCompany, formatDate, profile = {}, logoUrl = '', format }) {
   const snapshot = doc || {};
@@ -191,10 +225,7 @@ export function toPrintPayload({ cream, doc, row, full, company: selectedCompany
     },
     gst,
     items,
-    ledgerEntries: (snapshot.ledgerEntries || full?.ledger_entries || []).map(e => ({
-      ledger_name: e.ledgerName || e.ledger_name || e.name,
-      amount: e.amount,
-    })),
+    ledgerEntries: mapPrintLedgerEntries(snapshot, full, row),
     eInvoice: snapshot.eInvoice || full?.e_invoice || null,
     eWayBill: snapshot.eWayBill || full?.e_way_bill || null,
     profile,
