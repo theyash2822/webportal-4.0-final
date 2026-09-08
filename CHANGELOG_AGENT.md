@@ -4,6 +4,14 @@ Format: Date | Task | Files Changed | Behavior Changed | Tested | Risks
 
 ---
 
+## 2026-09-08 | QA + push cream/Thermal voucher work to cursor
+Files changed: (commit `30b13d2`) cream drawer, Thermal PDF, voucher config, inventory restore
+- QA: `vite build` GREEN. Repo-wide eslint still noisy (pre-existing); changed-file lint mostly legacy shared.jsx/AppShell hooks.
+- Pushed `cursor` → `webportal40` (webportal-4.0-final) and `origin` (tallydekho-web).
+Tested: build OK; remotes updated `735c038..30b13d2`.
+
+---
+
 ## 2026-09-08 | TallyDekho Thermal PDF (replaces Ledger) — mobile parity
 Files changed: `src/utils/thermalShared.js`, `src/utils/thermalPrint.js`, `src/utils/voucherConfig.js`, `src/utils/voucherPdfBuild.js`, `src/utils/invoicePrint.js`, `src/components/settings/VoucherConfigPanel.jsx`, `src/pages/shared.jsx`, `src/pages/DocumentViewer.jsx`
 - Settings formats: **Classic · Thermal · Executive** (Ledger/`td_ledger_v1`/`modern_a` migrate → Thermal).
