@@ -1,9 +1,9 @@
 import { useCallback, useEffect, useState, useRef } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { Upload, Check, ChevronRight } from 'lucide-react';
+import { Upload, Check, ChevronRight, ChevronDown, ChevronUp, Plus, Search, Trash2, X } from 'lucide-react';
 import {
   Card, Panel, Button, DataTable, Pill, Toggle, SettingRow, Select, Input,
-  Field, KV, Textarea, Empty, Skeleton, useLabelT,
+  Field, KV, Textarea, Empty, Skeleton, Modal, useLabelT,
 } from '../components/kit';
 import { useFmt } from './shared';
 import { useSettings } from '../contexts/SettingsContext';
@@ -771,35 +771,400 @@ export function SettingsNotificationChannels() {
   );
 }
 
+const REMINDER_ORDINALS = ['First', 'Second', 'Third', 'Fourth'];
+const MAX_PAYMENT_REMINDERS = 4;
+
+function defaultPaymentReminder(index = 0) {
+  return {
+    id: `r${index + 1}`,
+    name: `${REMINDER_ORDINALS[index] || 'Reminder'} Reminder`,
+    daysBefore: index === 0 ? 3 : 0,
+    time: index === 0 ? '10:00 AM' : '09:00 AM',
+    onDueDate: index === 1,
+    enabled: index < 2,
+    channels: {
+      email: index === 1,
+      whatsapp: index === 0,
+      sms: false,
+    },
+    exceptions: [],
+  };
+}
+
+function normalizePaymentReminders(list) {
+  if (!Array.isArray(list) || !list.length) {
+    return [defaultPaymentReminder(0), defaultPaymentReminder(1)];
+  }
+  return list.slice(0, MAX_PAYMENT_REMINDERS).map((r, i) => ({
+    id: r.id || `r${i + 1}`,
+    name: r.name || `${REMINDER_ORDINALS[i]} Reminder`,
+    daysBefore: Number.isFinite(Number(r.daysBefore)) ? Number(r.daysBefore) : 0,
+    time: r.time || '09:00 AM',
+    onDueDate: !!r.onDueDate,
+    enabled: !!r.enabled,
+    channels: {
+      email: !!r.channels?.email,
+      whatsapp: !!r.channels?.whatsapp,
+      sms: !!r.channels?.sms,
+    },
+    exceptions: Array.isArray(r.exceptions) ? r.exceptions : [],
+  }));
+}
+
 export function SettingsPaymentReminders() {
   const lt = useLabelT();
+  const { selectedCompany } = useAuth();
   const config = useRemoteConfig('/api/alert-settings', {
     payment_reminders: {
-      threshold: 0,
-      reminders: [{ enabled: false, daysBefore: 3, time: '09:00 AM', channels: { whatsapp: true, email: false, sms: false }, exceptions: [] }],
+      threshold: 500,
+      reminders: [defaultPaymentReminder(0), defaultPaymentReminder(1)],
     },
   });
   const payment = config.value.payment_reminders || {};
-  const reminder = payment.reminders?.[0] || { enabled: false, daysBefore: 3, time: '09:00 AM', channels: {} };
-  const update = patch => config.setValue({
-    ...config.value,
-    payment_reminders: { ...payment, reminders: [{ ...reminder, ...patch }, ...(payment.reminders || []).slice(1)] },
-  });
-  const updateChannel = channel => update({ channels: { whatsapp: channel === 'WhatsApp', email: channel === 'Email', sms: channel === 'SMS' } });
-  const channel = reminder.channels?.email ? 'Email' : reminder.channels?.sms ? 'SMS' : 'WhatsApp';
+  const reminders = normalizePaymentReminders(payment.reminders);
+  const [expanded, setExpanded] = useState(() => new Set());
+  const [pickerForId, setPickerForId] = useState(null);
+  const [partyOptions, setPartyOptions] = useState([]);
+  const [partyLoading, setPartyLoading] = useState(false);
+  const [partySearch, setPartySearch] = useState('');
+  const [draftExceptions, setDraftExceptions] = useState([]);
+
+  // Hydrate empty/missing reminder list (mobile defaults to two cards) and expand first.
+  useEffect(() => {
+    if (!config.loaded) return;
+    const pr = config.value.payment_reminders || {};
+    const raw = pr.reminders;
+    const normalized = normalizePaymentReminders(raw);
+    if (!Array.isArray(raw) || raw.length === 0) {
+      config.setValue({
+        ...config.value,
+        payment_reminders: { ...pr, threshold: pr.threshold ?? 500, reminders: normalized },
+      });
+    }
+    setExpanded(prev => (prev.size ? prev : new Set([normalized[0]?.id].filter(Boolean))));
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- only when load completes
+  }, [config.loaded]);
+
+  const setPayment = (patch) => {
+    config.setValue({
+      ...config.value,
+      payment_reminders: { ...payment, ...patch },
+    });
+  };
+
+  const setReminders = (next) => setPayment({ reminders: next });
+
+  const updateReminder = (id, patch) => {
+    setReminders(reminders.map(r => (r.id === id ? { ...r, ...patch } : r)));
+  };
+
+  const updateChannels = (id, key) => {
+    const row = reminders.find(r => r.id === id);
+    if (!row) return;
+    updateReminder(id, {
+      channels: { ...row.channels, [key]: !row.channels?.[key] },
+    });
+  };
+
+  const addReminder = () => {
+    if (reminders.length >= MAX_PAYMENT_REMINDERS) return;
+    const next = {
+      ...defaultPaymentReminder(reminders.length),
+      id: `r${Date.now()}`,
+      enabled: false,
+      onDueDate: false,
+      channels: { email: false, whatsapp: false, sms: false },
+      time: '',
+    };
+    setReminders([...reminders, next]);
+    setExpanded(prev => new Set([...prev, next.id]));
+  };
+
+  const removeReminder = (id) => {
+    if (reminders.length <= 1) return;
+    setReminders(reminders.filter(r => r.id !== id));
+    setExpanded(prev => {
+      const n = new Set(prev);
+      n.delete(id);
+      return n;
+    });
+  };
+
+  const openExceptionPicker = async (reminder) => {
+    setPickerForId(reminder.id);
+    setDraftExceptions([...(reminder.exceptions || [])]);
+    setPartySearch('');
+    if (!selectedCompany?.guid) return;
+    setPartyLoading(true);
+    try {
+      const [debtors, creditors] = await Promise.all([
+        api.fetchLedgers({ companyGuid: selectedCompany.guid, group: 'Sundry Debtors', limit: 200, pageSize: 200 }),
+        api.fetchLedgers({ companyGuid: selectedCompany.guid, group: 'Sundry Creditors', limit: 200, pageSize: 200 }),
+      ]);
+      const names = new Set();
+      [...(api.unwrapList(debtors) || []), ...(api.unwrapList(creditors) || [])].forEach(row => {
+        const n = String(row?.name || '').trim();
+        if (n) names.add(n);
+      });
+      setPartyOptions([...names].sort((a, b) => a.localeCompare(b)));
+    } catch {
+      setPartyOptions([]);
+    } finally {
+      setPartyLoading(false);
+    }
+  };
+
+  const filteredParties = partySearch.trim()
+    ? partyOptions.filter(n => n.toLowerCase().includes(partySearch.trim().toLowerCase()))
+    : partyOptions;
+
   return (
-    <Section title="Payment Reminders" sub="Automatic follow-ups on overdue receivables" testid="settings-payment-reminders" actions={<SaveAction config={config} testid="payment-reminders-save" />}>
+    <Section
+      title="Payment Reminders"
+      sub="Automatic follow-ups on overdue receivables — up to 4 reminders (mobile parity)"
+      testid="settings-payment-reminders"
+      actions={<SaveAction config={config} testid="payment-reminders-save" />}
+    >
       <ConfigState config={config}>
-      <Card>
-        <SettingRow title="Enable reminders"><Toggle checked={!!reminder.enabled} onChange={v => update({ enabled: v })} testid="toggle-reminders" /></SettingRow>
-        <SettingRow title="Reminder lead time (days before due)"><Input type="number" className="w-24" data-testid="first-reminder" value={reminder.daysBefore} onChange={e => update({ daysBefore: Number(e.target.value) })} /></SettingRow>
-        <SettingRow title="Send time"><Input className="w-32" value={reminder.time || ''} onChange={e => update({ time: e.target.value })} placeholder={lt('09:00 AM')} /></SettingRow>
-        <SettingRow title="Send via">
-           <Select className="w-40" value={channel} onChange={e => updateChannel(e.target.value)}>{['Email', 'SMS', 'WhatsApp'].map(o => <option key={o} value={o}>{lt(o)}</option>)}</Select>
-        </SettingRow>
-        <SettingRow title="Minimum outstanding" desc="Skip smaller balances"><Input type="number" className="w-32" value={payment.threshold ?? 0} onChange={e => config.setValue({ ...config.value, payment_reminders: { ...payment, threshold: Number(e.target.value) } })} /></SettingRow>
-      </Card>
+        <Card>
+          <SettingRow title="Minimum outstanding" desc="Don't send reminders for invoices below this amount">
+            <Input
+              type="number"
+              className="w-32"
+              data-testid="payment-reminders-threshold"
+              value={payment.threshold ?? 0}
+              onChange={e => setPayment({ threshold: Number(e.target.value) })}
+            />
+          </SettingRow>
+        </Card>
+
+        <div className="space-y-3" data-testid="payment-reminders-list">
+          <p className="text-[11px] font-bold uppercase tracking-wide text-ink-faint">{lt('List of Reminders')}</p>
+          {reminders.map((reminder, index) => {
+            const isOpen = expanded.has(reminder.id);
+            const exceptions = reminder.exceptions || [];
+            return (
+              <Card key={reminder.id} className="overflow-hidden p-0" data-testid={`payment-reminder-card-${index}`}>
+                <div className="flex items-center gap-3 border-b border-line px-4 py-3">
+                  <Input
+                    className="h-9 flex-1"
+                    value={reminder.name}
+                    onChange={e => updateReminder(reminder.id, { name: e.target.value })}
+                    placeholder={lt(`${REMINDER_ORDINALS[index]} Reminder`)}
+                    data-testid={`payment-reminder-name-${index}`}
+                  />
+                  <Toggle
+                    checked={!!reminder.enabled}
+                    onChange={v => updateReminder(reminder.id, { enabled: v })}
+                    testid={`payment-reminder-enabled-${index}`}
+                  />
+                  <button
+                    type="button"
+                    aria-label={lt(isOpen ? 'Collapse' : 'Expand')}
+                    className="rounded-lg border border-line p-2 text-ink-soft hover:bg-cream"
+                    onClick={() => setExpanded(prev => {
+                      const n = new Set(prev);
+                      if (n.has(reminder.id)) n.delete(reminder.id);
+                      else n.add(reminder.id);
+                      return n;
+                    })}
+                  >
+                    {isOpen ? <ChevronUp size={16} /> : <ChevronDown size={16} />}
+                  </button>
+                </div>
+
+                {isOpen && (
+                  <div className="space-y-4 px-4 py-4">
+                    <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
+                      <Field label="Days before due">
+                        <div className="flex items-center gap-2">
+                          <Button
+                            onClick={() => updateReminder(reminder.id, { daysBefore: Math.max(0, Number(reminder.daysBefore || 0) - 1) })}
+                            data-testid={`payment-reminder-days-dec-${index}`}
+                          >
+                            −
+                          </Button>
+                          <Input
+                            type="number"
+                            min="0"
+                            className="w-20 text-center"
+                            value={reminder.daysBefore}
+                            onChange={e => updateReminder(reminder.id, { daysBefore: Math.max(0, Number(e.target.value) || 0) })}
+                            data-testid={`payment-reminder-days-${index}`}
+                          />
+                          <Button
+                            onClick={() => updateReminder(reminder.id, { daysBefore: Number(reminder.daysBefore || 0) + 1 })}
+                            data-testid={`payment-reminder-days-inc-${index}`}
+                          >
+                            +
+                          </Button>
+                        </div>
+                      </Field>
+                      <Field label="Send time">
+                        <Input
+                          value={reminder.time || ''}
+                          onChange={e => updateReminder(reminder.id, { time: e.target.value })}
+                          placeholder={lt('09:00 AM')}
+                          data-testid={`payment-reminder-time-${index}`}
+                        />
+                      </Field>
+                    </div>
+
+                    <SettingRow title="On due date" desc="Send on the invoice due date instead of days-before">
+                      <Toggle
+                        checked={!!reminder.onDueDate}
+                        onChange={v => updateReminder(reminder.id, { onDueDate: v })}
+                        testid={`payment-reminder-on-due-${index}`}
+                      />
+                    </SettingRow>
+
+                    <div>
+                      <p className="mb-2 text-[12px] font-semibold text-ink">{lt('Channels')}</p>
+                      <div className="flex flex-wrap gap-2">
+                        {['email', 'whatsapp', 'sms'].map(ch => {
+                          const active = !!reminder.channels?.[ch];
+                          return (
+                            <button
+                              key={ch}
+                              type="button"
+                              data-testid={`payment-reminder-channel-${ch}-${index}`}
+                              onClick={() => updateChannels(reminder.id, ch)}
+                              className={`rounded-full border px-3 py-1.5 text-[12px] font-semibold capitalize ${
+                                active ? 'border-ink bg-ink text-white' : 'border-line bg-paper text-ink'
+                              }`}
+                            >
+                              {lt(ch)}
+                            </button>
+                          );
+                        })}
+                      </div>
+                    </div>
+
+                    <div>
+                      <div className="mb-2 flex items-center justify-between gap-2">
+                        <p className="text-[12px] font-semibold text-ink">
+                          {lt('Exceptions')}{exceptions.length ? ` (${exceptions.length})` : ''}
+                        </p>
+                        <Button
+                          data-testid={`payment-reminder-exceptions-${index}`}
+                          onClick={() => openExceptionPicker(reminder)}
+                        >
+                          {lt('Manage')}
+                        </Button>
+                      </div>
+                      {exceptions.length > 0 && (
+                        <div className="flex flex-wrap gap-2">
+                          {exceptions.map(name => (
+                            <span key={name} className="inline-flex max-w-full items-center gap-1 rounded-full border border-line bg-cream px-2.5 py-1 text-[12px] text-ink">
+                              <span className="truncate">{name}</span>
+                              <button
+                                type="button"
+                                aria-label={lt('Remove')}
+                                className="text-ink-faint hover:text-ink"
+                                onClick={() => updateReminder(reminder.id, {
+                                  exceptions: exceptions.filter(e => e !== name),
+                                })}
+                              >
+                                <X size={12} />
+                              </button>
+                            </span>
+                          ))}
+                        </div>
+                      )}
+                    </div>
+
+                    {index > 0 && (
+                      <Button
+                        className="text-neg"
+                        data-testid={`payment-reminder-remove-${index}`}
+                        onClick={() => removeReminder(reminder.id)}
+                      >
+                        <Trash2 size={14} /> {lt('Remove Reminder')}
+                      </Button>
+                    )}
+                  </div>
+                )}
+              </Card>
+            );
+          })}
+        </div>
+
+        {reminders.length < MAX_PAYMENT_REMINDERS ? (
+          <Button
+            className="w-full"
+            data-testid="payment-reminders-add"
+            onClick={addReminder}
+          >
+            <Plus size={16} /> {lt('Add Reminder')}
+            <span className="ml-auto text-[11px] text-ink-faint">{reminders.length}/{MAX_PAYMENT_REMINDERS}</span>
+          </Button>
+        ) : (
+          <p className="text-center text-[12px] text-ink-faint" data-testid="payment-reminders-max">
+            {lt('Maximum 4 reminders reached')}
+          </p>
+        )}
       </ConfigState>
+
+      {pickerForId && (
+        <Modal
+          open
+          onClose={() => setPickerForId(null)}
+          title={lt('Exception parties')}
+          testid="payment-reminders-exception-modal"
+          footer={(
+            <div className="flex justify-end gap-2">
+              <Button onClick={() => setPickerForId(null)}>{lt('Cancel')}</Button>
+              <Button
+                variant="primary"
+                data-testid="payment-reminders-exceptions-save"
+                onClick={() => {
+                  updateReminder(pickerForId, { exceptions: draftExceptions });
+                  setPickerForId(null);
+                }}
+              >
+                {lt('Save exceptions')}
+              </Button>
+            </div>
+          )}
+        >
+          <div className="mb-3 flex items-center gap-2 rounded-xl border border-line bg-cream px-3 py-2">
+            <Search size={14} className="text-ink-faint" />
+            <input
+              value={partySearch}
+              onChange={e => setPartySearch(e.target.value)}
+              placeholder={lt('Search parties…')}
+              data-testid="payment-reminders-exception-search"
+              className="h-8 w-full bg-transparent text-[13px] outline-none placeholder:text-ink-faint"
+            />
+          </div>
+          {partyLoading ? (
+            <p className="py-6 text-center text-[13px] text-ink-faint">{lt('Loading parties…')}</p>
+          ) : filteredParties.length === 0 ? (
+            <Empty message="No parties found" hint="Sundry Debtors and Creditors from Tally appear here." />
+          ) : (
+            <div className="max-h-[45vh] space-y-1 overflow-y-auto">
+              {filteredParties.map(name => {
+                const checked = draftExceptions.includes(name);
+                return (
+                  <button
+                    key={name}
+                    type="button"
+                    onClick={() => setDraftExceptions(prev => (
+                      checked ? prev.filter(n => n !== name) : [...prev, name]
+                    ))}
+                    className={`flex w-full items-center gap-2 rounded-lg px-3 py-2 text-left text-[13px] ${checked ? 'bg-cream font-semibold text-ink' : 'text-ink-soft hover:bg-cream'}`}
+                  >
+                    <span className={`flex h-4 w-4 items-center justify-center rounded border ${checked ? 'border-ink bg-ink text-white' : 'border-line-strong'}`}>
+                      {checked && <Check size={11} strokeWidth={3} />}
+                    </span>
+                    <span className="truncate">{name}</span>
+                  </button>
+                );
+              })}
+            </div>
+          )}
+        </Modal>
+      )}
     </Section>
   );
 }

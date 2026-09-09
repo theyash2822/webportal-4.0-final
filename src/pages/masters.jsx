@@ -74,7 +74,20 @@ export function Parties() {
   const [active, setActive] = useState(null);
   const { subtitle } = useLiveCompanyMeta();
   const live = useLiveList(
-    () => selectedCompany?.guid ? api.fetchParties(fyBody(selectedCompany, selectedFY)) : Promise.resolve([]),
+    async () => {
+      if (!selectedCompany?.guid) return [];
+      const base = fyBody(selectedCompany, selectedFY);
+      const [customers, vendors] = await Promise.all([
+        api.fetchParties({ ...base, type: 'customer', pageSize: 2000, limit: 2000 }),
+        api.fetchParties({ ...base, type: 'vendor', pageSize: 2000, limit: 2000 }),
+      ]);
+      const byKey = new Map();
+      [...(unwrapList(customers) || []), ...(unwrapList(vendors) || [])].forEach((p, index) => {
+        const key = p.guid || p.name || index;
+        if (!byKey.has(key)) byKey.set(key, p);
+      });
+      return [...byKey.values()];
+    },
     [selectedCompany?.guid, selectedFY?.startDate, selectedFY?.endDate, selectedFY?.finYear, selectedFY?.uniqueId]
   );
   const parties = useMemo(() => live.rows.map((p, index) => {

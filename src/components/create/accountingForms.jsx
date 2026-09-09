@@ -91,14 +91,16 @@ function MoneyVoucherForm({ direction, onClose, onCreated, onViewDocument }) {
   const isPayment = direction === 'payment';
   const prefix = isPayment ? 'payment' : 'receipt';
   const title = isPayment ? 'Payment' : 'Receipt';
-  const { loading, error: loadError, opt, company, retry } = useCreateData(['parties']);
+  const { loading, error: loadError, company, retry } = useCreateData([]);
   const { selectedFY } = useAuth();
   const numberingPolicy = useNumberingPolicy(company?.guid);
   const { saving, error, setError, done, run } = useSubmit();
   const [entryType, setEntryType] = useState('regular');
   const [date, setDate] = useState(todayISO());
   const [party, setParty] = useState('');
-  const [showAll, setShowAll] = useState(false);
+  const [partyFilter, setPartyFilter] = useState(isPayment ? 'vendor' : 'customer');
+  const [partyRows, setPartyRows] = useState([]);
+  const [partiesLoading, setPartiesLoading] = useState(false);
   const [amount, setAmount] = useState('');
   const [method, setMethod] = useState('Cash');
   const [ledger, setLedger] = useState('');
@@ -113,9 +115,44 @@ function MoneyVoucherForm({ direction, onClose, onCreated, onViewDocument }) {
   const [allocations, setAllocations] = useState({});
   const [remainderMode, setRemainderMode] = useState('On Account');
 
+  const partyFilterLabel = isPayment
+    ? (partyFilter === 'vendor' ? 'Sundry Creditors ▾' : partyFilter === 'expense' ? 'Expenses ▾' : 'All ledgers ▾')
+    : (partyFilter === 'customer' ? 'Sundry Debtors ▾' : partyFilter === 'income' ? 'Incomes ▾' : 'All ledgers ▾');
+
+  const cyclePartyFilter = () => {
+    setParty('');
+    setPartyFilter(prev => {
+      if (isPayment) {
+        if (prev === 'vendor') return 'expense';
+        if (prev === 'expense') return 'all';
+        return 'vendor';
+      }
+      if (prev === 'customer') return 'income';
+      if (prev === 'income') return 'all';
+      return 'customer';
+    });
+  };
+
   useEffect(() => {
     if (entryType === 'regular') setDate(todayISO());
   }, [entryType]);
+
+  useEffect(() => {
+    if (!company?.guid) return;
+    let alive = true;
+    setPartiesLoading(true);
+    const typed =
+      partyFilter === 'vendor' ? { type: 'vendor' }
+        : partyFilter === 'expense' ? { type: 'expense' }
+          : partyFilter === 'customer' ? { type: 'customer' }
+            : partyFilter === 'income' ? { type: 'income' }
+              : {};
+    api.fetchParties({ companyGuid: company.guid, pageSize: 500, ...typed })
+      .then(res => { if (alive) setPartyRows(api.unwrapList(res)); })
+      .catch(() => { if (alive) { setPartyRows([]); setError('Unable to load parties.'); } })
+      .finally(() => { if (alive) setPartiesLoading(false); });
+    return () => { alive = false; };
+  }, [company?.guid, partyFilter, setError]);
 
   useEffect(() => {
     if (!company?.guid) return;
@@ -142,11 +179,7 @@ function MoneyVoucherForm({ direction, onClose, onCreated, onViewDocument }) {
     return () => { alive = false; };
   }, [company?.guid, party, isPayment, setError]);
 
-  const parties = useMemo(() => {
-    const rows = opt.parties || [];
-    if (showAll) return rows;
-    return rows.filter(row => containsParent(row, isPayment ? 'Creditor' : 'Debtor'));
-  }, [opt.parties, showAll, isPayment]);
+  const parties = partyRows;
 
   const submit = async () => {
     const allocated = Object.values(allocations).reduce((sum, value) => sum + num(value), 0);
@@ -200,11 +233,24 @@ function MoneyVoucherForm({ direction, onClose, onCreated, onViewDocument }) {
           </Field>
           <Field label="Party ledger *" className="sm:col-span-2">
             <SearchSelect value={party} onChange={setParty} options={parties} required
-              subOf={parentOf} placeholder="Select party…" testid={`${prefix}-party`} />
+              subOf={parentOf}
+              placeholder={partiesLoading ? 'Loading parties…' : 'Select party…'}
+              testid={`${prefix}-party`} />
           </Field>
           <div className="sm:col-span-2">
-            <ToggleRow label="Show all parties" hint={`Default: Sundry ${isPayment ? 'Creditors' : 'Debtors'}`}
-              checked={showAll} onChange={setShowAll} testid={`${prefix}-show-all-parties`} />
+            <button
+              type="button"
+              onClick={cyclePartyFilter}
+              data-testid={`${prefix}-party-filter`}
+              className="text-[12px] font-semibold text-ink underline-offset-2 hover:underline"
+            >
+              {lt(partyFilterLabel)}
+            </button>
+            <p className="mt-1 text-[11px] text-ink-faint">
+              {lt(isPayment
+                ? 'Tap to cycle: Creditors → Expenses → All'
+                : 'Tap to cycle: Debtors → Incomes → All')}
+            </p>
           </div>
           <Field label={`${title} amount (₹) *`}>
             <Input type="number" min="0" step="any" value={amount} onChange={e => setAmount(e.target.value)}

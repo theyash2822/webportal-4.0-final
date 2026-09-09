@@ -463,7 +463,7 @@ export function TableFilter({ label = 'Filter', value = [], onChange, options = 
         <div
           role="listbox"
           aria-multiselectable="true"
-          className="pop absolute left-0 top-full z-[90] mt-2 min-w-[240px] overflow-hidden rounded-xl border border-line bg-surface p-1.5 shadow-lg"
+          className="pop absolute left-0 top-full z-[90] mt-2 max-h-[min(60vh,420px)] min-w-[240px] overflow-y-auto rounded-xl border border-line bg-surface p-1.5 shadow-lg"
           data-testid={`${testid}-menu`}
         >
           <div className="px-2.5 pb-1.5 pt-1 text-[10px] font-bold uppercase tracking-wider text-ink-faint">{lt(label)}</div>
@@ -700,7 +700,12 @@ export function Modal({ open, onClose, title, sub, children, footer, wide, testi
   sub = lt(sub);
   useEffect(() => {
     if (!open) return;
-    const h = e => e.key === 'Escape' && onClose?.();
+    const h = e => {
+      if (e.key !== 'Escape') return;
+      // Let portal Select/SearchSelect (capture) consume Escape first.
+      if (e.defaultPrevented) return;
+      onClose?.();
+    };
     document.addEventListener('keydown', h);
     return () => document.removeEventListener('keydown', h);
   }, [open, onClose]);
@@ -777,7 +782,12 @@ export function Drawer({ open, onClose, title, sub, children, footer, size = 'md
 
   useEffect(() => {
     if (!open || !isTop) return;
-    const h = e => { if (e.key === 'Escape') { e.stopPropagation(); onClose?.(); } };
+    const h = e => {
+      if (e.key !== 'Escape') return;
+      if (e.defaultPrevented) return;
+      e.stopPropagation();
+      onClose?.();
+    };
     document.addEventListener('keydown', h);
     return () => document.removeEventListener('keydown', h);
   }, [open, isTop, onClose]);
@@ -860,9 +870,56 @@ export function Select({ value, onChange, children, className = '', 'data-testid
 
   const [open, setOpen] = useState(false);
   const [cursor, setCursor] = useState(0);
-  const ref = useClickOutside(() => setOpen(false));
+  const [pos, setPos] = useState(null);
+  const btnRef = useRef(null);
+  const menuRef = useRef(null);
   const current = options.find(o => String(o.value) === String(value));
   const pick = v => { onChange?.({ target: { value: v } }); setOpen(false); };
+
+  const place = useCallback(() => {
+    const el = btnRef.current;
+    if (!el) return;
+    const r = el.getBoundingClientRect();
+    const spaceBelow = window.innerHeight - r.bottom;
+    const spaceAbove = r.top;
+    const preferDown = spaceBelow >= 180 || spaceBelow >= spaceAbove;
+    const maxH = Math.min(280, Math.max(120, (preferDown ? spaceBelow : spaceAbove) - 16));
+    setPos({
+      left: Math.max(8, Math.min(r.left, window.innerWidth - Math.max(r.width, 190) - 8)),
+      width: Math.max(r.width, 190),
+      maxH,
+      top: preferDown ? r.bottom + 4 : undefined,
+      bottom: preferDown ? undefined : window.innerHeight - r.top + 4,
+    });
+  }, []);
+
+  useEffect(() => {
+    if (!open) return undefined;
+    place();
+    const onReposition = () => place();
+    const onDown = e => {
+      if (btnRef.current?.contains(e.target) || menuRef.current?.contains(e.target)) return;
+      setOpen(false);
+    };
+    const onKey = e => {
+      if (e.key === 'Escape') {
+        e.preventDefault();
+        e.stopPropagation();
+        if (typeof e.stopImmediatePropagation === 'function') e.stopImmediatePropagation();
+        setOpen(false);
+      }
+    };
+    window.addEventListener('resize', onReposition);
+    window.addEventListener('scroll', onReposition, true);
+    document.addEventListener('mousedown', onDown);
+    document.addEventListener('keydown', onKey, true);
+    return () => {
+      window.removeEventListener('resize', onReposition);
+      window.removeEventListener('scroll', onReposition, true);
+      document.removeEventListener('mousedown', onDown);
+      document.removeEventListener('keydown', onKey, true);
+    };
+  }, [open, place]);
 
   const onKeyDown = e => {
     if (!open && (e.key === 'Enter' || e.key === ' ' || e.key === 'ArrowDown')) { e.preventDefault(); setOpen(true); return; }
@@ -872,12 +929,12 @@ export function Select({ value, onChange, children, className = '', 'data-testid
     if (e.key === 'Home') { e.preventDefault(); setCursor(0); }
     if (e.key === 'End') { e.preventDefault(); setCursor(options.length - 1); }
     if (e.key === 'Enter' && options[cursor]) { e.preventDefault(); pick(options[cursor].value); }
-    if (e.key === 'Escape') setOpen(false);
   };
 
   return (
-    <div className={`relative ${className}`} ref={ref}>
+    <div className={`relative ${className}`}>
       <button
+        ref={btnRef}
         type="button"
         role="combobox"
         aria-expanded={open}
@@ -894,8 +951,13 @@ export function Select({ value, onChange, children, className = '', 'data-testid
         <span className={current ? 'font-medium' : 'text-ink-faint'}>{current ? lt(current.label) : lt('Select')}</span>
         <ChevronDown size={16} strokeWidth={2} className={`flex-shrink-0 text-ink-faint transition-transform ${open ? 'rotate-180' : ''}`} />
       </button>
-      {open && (
-        <div role="listbox" className="pop absolute left-0 top-full z-[80] mt-2 max-h-64 w-full min-w-[190px] overflow-y-auto rounded-xl border border-line bg-surface shadow-md">
+      {open && pos && createPortal(
+        <div
+          ref={menuRef}
+          role="listbox"
+          className="pop fixed z-[320] overflow-y-auto rounded-xl border border-line bg-surface shadow-md"
+          style={{ left: pos.left, width: pos.width, top: pos.top, bottom: pos.bottom, maxHeight: pos.maxH }}
+        >
           {options.map((o, k) => (
             <button
               key={String(o.value)}
@@ -909,11 +971,12 @@ export function Select({ value, onChange, children, className = '', 'data-testid
                 String(o.value) === String(value) ? 'bg-cream font-bold text-ink' : k === cursor ? 'bg-cream text-ink' : 'font-medium text-ink-soft hover:bg-cream'
               }`}
             >
-              {lt(o.label)}
-              {String(o.value) === String(value) && <Check size={16} strokeWidth={2.5} />}
+              <span>{lt(o.label)}</span>
+              {String(o.value) === String(value) && <Check size={14} className="text-ink" />}
             </button>
           ))}
-        </div>
+        </div>,
+        document.body,
       )}
       <select value={value ?? ''} onChange={onChange} tabIndex={-1} aria-hidden className="sr-only absolute h-0 w-0 opacity-0">
         {options.map(o => <option key={String(o.value)} value={o.value}>{o.label}</option>)}

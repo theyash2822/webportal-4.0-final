@@ -91,6 +91,7 @@ export function mergeVoucherConfigs(parsed) {
       ...merged[k],
       ...parsed[k],
       format: resolveDocumentFormat(parsed[k]?.format),
+      qrType: normalizeQrType(parsed[k]?.qrType ?? merged[k].qrType),
       terms: Array.isArray(parsed[k]?.terms) ? parsed[k].terms : merged[k].terms,
       thermalPaperWidth: normalizeThermalWidth(
         parsed[k]?.thermalPaperWidth ?? merged[k].thermalPaperWidth
@@ -233,13 +234,17 @@ export function bankInfoFromConfig(cfg, bankRows = []) {
   };
 }
 
+/** Normalize QR mode — bank-account QR generation removed (not scannable / unused). */
+export function normalizeQrType(qrType) {
+  if (qrType === 'url') return 'url';
+  return 'upi';
+}
+
 function qrPayloadFromConfig(cfg) {
   if (!cfg?.qrEnabled) return null;
-  if (cfg.qrType === 'url' && cfg.qrUrl) return String(cfg.qrUrl);
-  if (cfg.qrType === 'upi' && cfg.qrUpiId) return `upi://pay?pa=${cfg.qrUpiId}`;
-  if (cfg.qrType === 'bank' && (cfg.qrIfsc || cfg.qrAccount)) {
-    return `Bank IFSC:${cfg.qrIfsc || ''} A/C:${cfg.qrAccount || ''}`;
-  }
+  const qrType = normalizeQrType(cfg.qrType);
+  if (qrType === 'url' && cfg.qrUrl) return String(cfg.qrUrl);
+  if (qrType === 'upi' && cfg.qrUpiId) return `upi://pay?pa=${cfg.qrUpiId}`;
   return null;
 }
 

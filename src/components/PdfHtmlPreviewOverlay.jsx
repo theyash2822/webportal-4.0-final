@@ -12,7 +12,7 @@ export default function PdfHtmlPreviewOverlay({ html, title, onClose }) {
 
   return createPortal(
     <div
-      className="fixed inset-0 z-[80] flex flex-col bg-ink/50 backdrop-blur-[2px]"
+      className="fixed inset-0 z-[280] flex flex-col bg-ink/50 backdrop-blur-[2px]"
       data-testid="pdf-html-preview-overlay"
       role="dialog"
       aria-modal="true"

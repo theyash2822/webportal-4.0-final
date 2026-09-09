@@ -349,7 +349,7 @@ export const fetchLedgers = async (body = {}) => {
     from: p.from,
     to: p.to,
     fy: p.fy,
-    group: body.group,
+    group: body.group || body.parent,
     nature: body.nature,
   }));
 };

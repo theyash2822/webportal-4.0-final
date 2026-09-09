@@ -17,6 +17,7 @@ import {
   writeLocalVoucherConfig,
   isThermalTemplateId,
   normalizeThermalWidth,
+  normalizeQrType,
 } from '../../utils/voucherConfig';
 import { persistVoucherConfigs } from '../../utils/voucherPdfBuild';
 import { buildThermalHTML } from '../../utils/thermalPrint';
@@ -32,7 +33,7 @@ function GeneratedQrPreview({ cfg }) {
       if (!cancelled) setSrc(url);
     });
     return () => { cancelled = true; };
-  }, [cfg?.qrEnabled, cfg?.qrType, cfg?.qrUpiId, cfg?.qrUrl, cfg?.qrIfsc, cfg?.qrAccount, cfg?.qrImage]);
+  }, [cfg?.qrEnabled, cfg?.qrType, cfg?.qrUpiId, cfg?.qrUrl, cfg?.qrImage]);
   if (!src) return null;
   return <img src={src} alt="QR preview" className="h-24 w-24 rounded border border-line" />;
 }
@@ -201,7 +202,9 @@ export default function VoucherConfigPanel() {
           ? resolveDocumentFormat(val)
           : key === 'thermalPaperWidth'
             ? normalizeThermalWidth(val)
-            : val,
+            : key === 'qrType'
+              ? normalizeQrType(val)
+              : val,
       };
       if (key === 'format' || key === 'thermalPaperWidth') nextCfg._updatedAt = Date.now();
       const next = { ...prev, [id]: nextCfg };
@@ -629,13 +632,14 @@ export default function VoucherConfigPanel() {
                         {[
                           { v: 'upi', l: 'UPI ID' },
                           { v: 'url', l: 'Website' },
-                          { v: 'bank', l: 'Bank Details' },
                         ].map(opt => (
                           <button
                             key={opt.v}
                             type="button"
                             className={`rounded-full border px-3 py-1.5 text-[12px] font-semibold ${
-                              cfg.qrType === opt.v ? 'border-ink bg-ink text-white' : 'border-line bg-paper text-ink'
+                              normalizeQrType(cfg.qrType) === opt.v
+                                ? 'border-ink bg-ink text-white'
+                                : 'border-line bg-paper text-ink'
                             }`}
                             onClick={() => update(vt.id, 'qrType', opt.v)}
                           >
@@ -643,33 +647,19 @@ export default function VoucherConfigPanel() {
                           </button>
                         ))}
                       </div>
-                      {cfg.qrType === 'upi' && (
+                      {normalizeQrType(cfg.qrType) === 'upi' && (
                         <Input
                           value={cfg.qrUpiId || ''}
                           onChange={e => update(vt.id, 'qrUpiId', e.target.value)}
                           placeholder={lt('Enter UPI ID (e.g. business@upi)')}
                         />
                       )}
-                      {cfg.qrType === 'url' && (
+                      {normalizeQrType(cfg.qrType) === 'url' && (
                         <Input
                           value={cfg.qrUrl || ''}
                           onChange={e => update(vt.id, 'qrUrl', e.target.value)}
                           placeholder={lt('Enter website URL (e.g. https://yoursite.com)')}
                         />
-                      )}
-                      {cfg.qrType === 'bank' && (
-                        <div className="space-y-2">
-                          <Input
-                            value={cfg.qrIfsc || ''}
-                            onChange={e => update(vt.id, 'qrIfsc', e.target.value.toUpperCase())}
-                            placeholder={lt('IFSC Code (e.g. HDFC0001234)')}
-                          />
-                          <Input
-                            value={cfg.qrAccount || ''}
-                            onChange={e => update(vt.id, 'qrAccount', e.target.value)}
-                            placeholder={lt('Account Number')}
-                          />
-                        </div>
                       )}
 
                       {cfg.qrImage ? (

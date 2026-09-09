@@ -636,7 +636,7 @@ function ReturnNoteForm({ type, onClose, onCreated, onViewDocument }) {
   const fyStart = selectedFY?.startDate || `${new Date().getFullYear()}-04-01`;
   const fyEnd = selectedFY?.endDate || `${new Date().getFullYear() + 1}-03-31`;
   const { loading, error: loadError, opt, company, retry } = useCreateData([
-    'parties', 'warehouses', credit ? 'salesLedgers' : 'purchaseLedgers', 'taxLedgers',
+    credit ? 'parties' : 'partiesVendor', 'warehouses', credit ? 'salesLedgers' : 'purchaseLedgers', 'taxLedgers',
   ]);
   const numberingPolicy = useNumberingPolicy(company?.guid);
   const submit = useSubmit();
@@ -756,7 +756,7 @@ function ReturnNoteForm({ type, onClose, onCreated, onViewDocument }) {
               onChange={e => setDate(e.target.value)} data-testid={`${prefix}-date`} />
           </Field>
           <Field label={credit ? 'Party' : 'Vendor'}>
-            <SearchSelect value={party} required onChange={setParty} options={opt.parties || []} testid={`${prefix}-party`} placeholder="Select party…" />
+            <SearchSelect value={party} required onChange={setParty} options={(credit ? opt.parties : opt.partiesVendor) || []} testid={`${prefix}-party`} placeholder="Select party…" />
           </Field>
           <Field label={`Original ${credit ? 'Sales' : 'Purchase'} invoice`} className="sm:col-span-2">
             <SearchSelect value={selected?.voucherNumber || ''} required disabled={!party || invoiceLoading}

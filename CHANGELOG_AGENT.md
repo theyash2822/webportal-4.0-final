@@ -4,6 +4,31 @@ Format: Date | Task | Files Changed | Behavior Changed | Tested | Risks
 
 ---
 
+## 2026-09-09 | Payment Reminders: multi-reminder list (mobile parity, max 4)
+Files changed: `src/pages/Settings.jsx`
+- Settings → Payment Reminders now supports **multiple reminders** like mobile (add up to 4, remove non-first, per-card enable/days/time/on-due-date/channels/exceptions).
+- Threshold stays global; each reminder has its own exception-party list.
+Tested: build pending.
+
+---
+
+## 2026-09-09 | Fix SearchSelect/party loaders/reminders/PDF stacking bugs
+Files changed: `common.jsx` (SearchSelect portal+Escape+viewport list), `kit.jsx` (Select portal, TableFilter max-height, Drawer/Modal Escape), `accountingForms.jsx` (typed Payment/Receipt party cycle), `voucherForms.jsx` (CN/DN typed parties), `masters.jsx` (Parties customer+vendor merge), `api.js` (`group || parent`), `Settings.jsx` (payment reminder exceptions), `PdfHtmlPreviewOverlay.jsx` (z-index)
+- P0: SearchSelect portals to body with flip; Escape closes menu only; Payment/Receipt use typed parties + cycle; sales/CN/DN/parties master typed.
+- P1: Payment reminder exception multi-select (Sundry Debtors/Creditors); SearchSelect “Showing N of M”; Select portals in modals; ledger limit 2000.
+- P2: fetchLedgers parent alias; TableFilter scroll; PDF overlay above drawers.
+Tested: `vite build`.
+
+---
+
+## 2026-09-09 | Remove bank-account QR generation from voucher config
+Files changed: `src/utils/voucherConfig.js`, `src/components/settings/VoucherConfigPanel.jsx`
+- Dropped “Bank Details” QR mode (IFSC/A/C text QR was not useful/scannable).
+- Auto-QR now only from **UPI** or **Website URL** (plus uploaded QR image). Legacy `qrType: bank` normalizes to UPI in UI/merge.
+Tested: settings QR chips show UPI/Website only; `qrPayloadFromConfig` ignores bank.
+
+---
+
 ## 2026-09-08 | Publish hardening: PDF correctness + privacy + auth storage
 Files changed: `creamPreviewModel.js`, `voucherConfig.js`, `voucherPdfBuild.js`, `sanitizeImageSrc.js`, `authStorage.js`, `AuthContext.jsx`, `api.js`, `invoicePrint.js`, `thermalPrint.js`, `VoucherConfigPanel.jsx`, Settings/compliance/websocket/SettingsContext, `package.json` (qrcode)
 - Print payload uses `row.ledger_entries` + signed `dr_cr` amounts (Thermal Dr/Cr).

@@ -1,6 +1,7 @@
 /* Shared building blocks for the create-form drawers.
  * Field specs mirror the mobile app (tallydekho-mobile-V4) — source of truth for parity. */
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
+import { createPortal } from 'react-dom';
 import { useNavigate } from 'react-router-dom';
 import { ChevronDown, Plus, Trash2, Search } from 'lucide-react';
 import { Field, Input, Select, Button, Toggle, useLabelT } from '../kit';
@@ -15,15 +16,16 @@ export const inr = v => `₹${num(v).toLocaleString('en-IN', { minimumFractionDi
 
 /* ── Data loading ──────────────────────────────────────────────────────────
  * useCreateData(['parties','items',...]) loads only what a form needs.
- * Available keys: parties, partiesVendor, ledgers, items, warehouses, banks,
- * salesLedgers, purchaseLedgers, taxLedgers, chargeLedgers (+ roundOffLedgers),
- * stockGroups, stockUnits, countries.
+ * Available keys: parties (customers), partiesVendor, partiesExpense, partiesIncome,
+ * ledgers, items, warehouses, banks, salesLedgers, purchaseLedgers, taxLedgers,
+ * chargeLedgers (+ roundOffLedgers), stockGroups, stockUnits, countries.
  */
 const LOADERS = {
-  parties:         g => api.fetchParties({ companyGuid: g, pageSize: 500 }),
+  parties:         g => api.fetchParties({ companyGuid: g, pageSize: 500, type: 'customer' }),
   partiesVendor:   g => api.fetchParties({ companyGuid: g, pageSize: 500, type: 'vendor' }),
   partiesExpense:  g => api.fetchParties({ companyGuid: g, pageSize: 500, type: 'expense' }),
-  ledgers:         g => api.fetchLedgers({ companyGuid: g, pageSize: 500 }),
+  partiesIncome:   g => api.fetchParties({ companyGuid: g, pageSize: 500, type: 'income' }),
+  ledgers:         g => api.fetchLedgers({ companyGuid: g, pageSize: 2000, limit: 2000 }),
   items:           async g => {
     let fyKey = 'fy';
     try {
@@ -131,43 +133,118 @@ export const asSelectOptions = list => (list || []).map(o => {
   return name ? { ...o, name } : null;
 }).filter(Boolean);
 
-/* ── SearchSelect — searchable combobox over strings or {name,...} rows ──── */
+/* ── SearchSelect — portal menu (survives drawer overflow) + Escape capture ─ */
+const SEARCH_SELECT_SHOW = 200;
+
+function menuPositionFor(el) {
+  if (!el) return null;
+  const r = el.getBoundingClientRect();
+  const spaceBelow = window.innerHeight - r.bottom;
+  const spaceAbove = r.top;
+  const preferDown = spaceBelow >= 200 || spaceBelow >= spaceAbove;
+  const maxH = Math.min(360, Math.max(140, (preferDown ? spaceBelow : spaceAbove) - 16));
+  return {
+    left: Math.max(8, Math.min(r.left, window.innerWidth - r.width - 8)),
+    width: r.width,
+    maxH,
+    top: preferDown ? r.bottom + 4 : undefined,
+    bottom: preferDown ? undefined : window.innerHeight - r.top + 4,
+  };
+}
+
 export function SearchSelect({ value, onChange, options = [], placeholder = 'Search…', testid, subOf, disabled, required, translateOptions = false }) {
   const lt = useLabelT();
   const [open, setOpen] = useState(false);
   const [q, setQ] = useState('');
-  const boxRef = useRef(null);
-  useEffect(() => {
-    const h = e => { if (boxRef.current && !boxRef.current.contains(e.target)) setOpen(false); };
-    document.addEventListener('mousedown', h);
-    return () => document.removeEventListener('mousedown', h);
-  }, []);
-  const rows = useMemo(() => {
+  const [pos, setPos] = useState(null);
+  const btnRef = useRef(null);
+  const menuRef = useRef(null);
+
+  const filtered = useMemo(() => {
     const lower = q.trim().toLowerCase();
     const all = asSelectOptions(options);
-    return (lower ? all.filter(o => o.name.toLowerCase().includes(lower)) : all).slice(0, 80);
+    return lower ? all.filter(o => o.name.toLowerCase().includes(lower)) : all;
   }, [options, q]);
+  const rows = filtered.slice(0, SEARCH_SELECT_SHOW);
+  const hiddenCount = Math.max(0, filtered.length - rows.length);
+
+  const place = useCallback(() => {
+    setPos(menuPositionFor(btnRef.current));
+  }, []);
+
+  useLayoutEffect(() => {
+    if (!open) return undefined;
+    place();
+    const onReposition = () => place();
+    window.addEventListener('resize', onReposition);
+    window.addEventListener('scroll', onReposition, true);
+    return () => {
+      window.removeEventListener('resize', onReposition);
+      window.removeEventListener('scroll', onReposition, true);
+    };
+  }, [open, place, filtered.length]);
+
+  useEffect(() => {
+    if (!open) return undefined;
+    const onDown = e => {
+      if (btnRef.current?.contains(e.target) || menuRef.current?.contains(e.target)) return;
+      setOpen(false);
+    };
+    const onKey = e => {
+      if (e.key !== 'Escape') return;
+      e.preventDefault();
+      e.stopPropagation();
+      if (typeof e.stopImmediatePropagation === 'function') e.stopImmediatePropagation();
+      setOpen(false);
+    };
+    document.addEventListener('mousedown', onDown);
+    document.addEventListener('keydown', onKey, true);
+    return () => {
+      document.removeEventListener('mousedown', onDown);
+      document.removeEventListener('keydown', onKey, true);
+    };
+  }, [open]);
+
   return (
-    <div ref={boxRef} className="relative">
+    <div className="relative">
       <button
+        ref={btnRef}
         type="button"
         data-testid={testid}
         disabled={disabled}
+        aria-expanded={open}
+        aria-haspopup="listbox"
         onClick={() => { setOpen(o => !o); setQ(''); }}
         className={`flex h-11 w-full items-center justify-between rounded-xl border border-line bg-cream px-3.5 text-left text-[13px] transition-colors focus:border-ink disabled:opacity-50 ${value ? 'text-ink' : 'text-ink-faint'}`}
       >
         <span className="truncate">{value ? (translateOptions ? lt(value) : value) : lt(placeholder)}</span>
         <ChevronDown size={14} className="flex-shrink-0 text-ink-faint" />
       </button>
-      {open && (
-        <div className="absolute z-30 mt-1 w-full overflow-hidden rounded-xl border border-line bg-surface shadow-lg">
+      {open && pos && createPortal(
+        <div
+          ref={menuRef}
+          role="listbox"
+          data-testid={testid ? `${testid}-menu` : undefined}
+          className="fixed z-[320] overflow-hidden rounded-xl border border-line bg-surface shadow-lg"
+          style={{
+            left: pos.left,
+            width: pos.width,
+            top: pos.top,
+            bottom: pos.bottom,
+          }}
+        >
           <div className="flex items-center gap-2 border-b border-line px-3 py-2">
             <Search size={13} className="text-ink-faint" />
-            <input autoFocus value={q} onChange={e => setQ(e.target.value)} placeholder={lt('Type to filter…')}
+            <input
+              autoFocus
+              value={q}
+              onChange={e => setQ(e.target.value)}
+              placeholder={lt('Type to filter…')}
               data-testid={testid ? `${testid}-search` : undefined}
-              className="h-7 w-full bg-transparent text-[13px] text-ink outline-none placeholder:text-ink-faint" />
+              className="h-7 w-full bg-transparent text-[13px] text-ink outline-none placeholder:text-ink-faint"
+            />
           </div>
-          <div className="max-h-56 overflow-y-auto">
+          <div className="overflow-y-auto" style={{ maxHeight: pos.maxH }}>
             {!required && value && (
               <button type="button" className="block w-full px-3.5 py-2 text-left text-[12px] text-ink-faint hover:bg-cream"
                 onClick={() => { onChange(''); setOpen(false); }}>{lt('Clear selection')}</button>
@@ -182,7 +259,15 @@ export function SearchSelect({ value, onChange, options = [], placeholder = 'Sea
               </button>
             ))}
           </div>
-        </div>
+          {(hiddenCount > 0 || filtered.length > 40) && (
+            <div className="border-t border-line px-3 py-1.5 text-[11px] text-ink-faint">
+              {hiddenCount > 0
+                ? lt(`Showing ${rows.length} of ${filtered.length} — type to narrow`)
+                : lt(`${filtered.length} matches`)}
+            </div>
+          )}
+        </div>,
+        document.body,
       )}
     </div>
   );
