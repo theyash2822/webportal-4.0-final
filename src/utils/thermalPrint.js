@@ -180,6 +180,7 @@ function renderCommercial(p, w) {
     profile.bankName ? `<div>Bank: ${esc(profile.bankName)}</div>` : '',
     profile.bankAccountNo ? `<div>A/C: ${esc(profile.bankAccountNo)}</div>` : '',
     profile.bankIfsc ? `<div>IFSC: ${esc(profile.bankIfsc)}</div>` : '',
+    profile.bankUpi ? `<div>UPI: ${esc(profile.bankUpi)}</div>` : '',
   ].filter(Boolean).join('');
 
   return `

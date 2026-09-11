@@ -93,8 +93,10 @@ export function buildInvoiceHTML({
   ledgerEntries = [], eInvoice = null, eWayBill = null,
   profile = {}, logoUrl = '', formatDate = (d) => d || '',
   format = 'tally_classic_v1',
+  qrImage = null,
 }) {
   const safeLogo = sanitizeImageSrc(logoUrl) || '';
+  const safeQr = sanitizeImageSrc(qrImage) || '';
   const title = docTitle(voucher.voucher_type);
   const grandTotal = Math.abs(Number(voucher.party_amount ?? voucher.amount) || 0);
   const fmt = String(format || 'tally_classic_v1');
@@ -183,6 +185,7 @@ export function buildInvoiceHTML({
     ['Bank', profile.bankName],
     ['A/c No.', profile.bankAccountNo],
     ['IFSC', profile.bankIfsc],
+    ['UPI', profile.bankUpi],
     ['Branch', profile.bankBranch],
   ].filter(([, v]) => v);
 
@@ -225,7 +228,7 @@ export function buildInvoiceHTML({
 
   const footBlocks = `
 <div class="foot">
-  ${bankRows.length ? `<div class="box"><h3>Bank Details</h3><table class="kv">${bankRows.map(([k, v]) => `<tr><td>${esc(k)}</td><td>${esc(v)}</td></tr>`).join('')}</table></div>` : ''}
+  ${bankRows.length || safeQr ? `<div class="box"><h3>Bank Details</h3>${bankRows.length ? `<table class="kv">${bankRows.map(([k, v]) => `<tr><td>${esc(k)}</td><td>${esc(v)}</td></tr>`).join('')}</table>` : ''}${safeQr ? `<div style="margin-top:8px"><img src="${esc(safeQr)}" alt="QR" style="width:72px;height:72px;object-fit:contain"/></div>` : ''}</div>` : ''}
   ${terms ? `<div class="box"><h3>Terms &amp; Conditions</h3><div class="terms">${esc(terms)}</div></div>` : ''}
   <div class="box sign"><div class="muted">For ${esc(company.name || '')}</div><div class="line">Authorised Signatory</div></div>
 </div>`;

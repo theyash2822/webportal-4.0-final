@@ -2,7 +2,7 @@ import { useCallback, useEffect, useState, useRef } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { Upload, Check, ChevronRight, ChevronDown, ChevronUp, Plus, Search, Trash2, X } from 'lucide-react';
 import {
-  Card, Panel, Button, DataTable, Pill, Toggle, SettingRow, Select, Input,
+  Card, Button, DataTable, Pill, Toggle, SettingRow, Select, Input,
   Field, KV, Textarea, Empty, Skeleton, Modal, useLabelT,
 } from '../components/kit';
 import { useFmt } from './shared';
@@ -15,6 +15,7 @@ import VoucherConfigPanel from '../components/settings/VoucherConfigPanel';
 import { registerWebPushToken, getPushPermissionStatus } from '../services/push';
 import { clearOnboardingForReplay } from '../utils/onboardingNav';
 import { getAuthToken } from '../utils/authStorage';
+import { formatBankCardNumber } from '../utils/voucherConfig';
 
 function Section({ title, sub, children, actions, testid, translated = false }) {
   const lt = useLabelT();
@@ -525,6 +526,7 @@ export function SettingsBankFeeds() {
     try {
       await api.createBankLedgerInTally({
         companyGuid: selectedCompany.guid,
+        companyName: selectedCompany.name,
         bankName: form.bankName.trim(),
         accountNumber: form.accountNumber.trim() || undefined,
         ifsc: form.ifsc.trim() || undefined,
@@ -564,14 +566,34 @@ export function SettingsBankFeeds() {
             <Empty message="No bank ledgers yet" hint={lt('Use Add bank account — creates via /tally/master/bank like mobile.')} />
           ) : (
             <DataTable testid="bank-ledgers-table" rows={state.rows} columns={[
-              { key: 'name', label: 'Bank ledger', render: r => <span className="font-medium">{r.name}</span> },
+              { key: 'name', label: 'Bank ledger', render: r => <span className="font-medium">{r.bank_name || r.name}</span> },
+              {
+                key: 'account_number',
+                label: 'Account no.',
+                render: r => {
+                  const ac = r.account_number || r.accountNo || '';
+                  return ac
+                    ? <span className="font-mono text-[12px] tracking-wide">{formatBankCardNumber(ac)}</span>
+                    : <span className="text-ink-faint">{lt('A/c not in sync yet')}</span>;
+                },
+              },
+              {
+                key: 'ifsc',
+                label: 'IFSC',
+                render: r => r.ifsc || r.ifsc_code || '—',
+              },
+              {
+                key: 'branch',
+                label: 'Branch',
+                render: r => r.branch || '—',
+              },
               { key: 'parent', label: 'Under group' },
               { key: 'balance_type', label: 'Dr/Cr', render: r => <Pill tone={r.balance_type === 'Dr' ? 'pos' : 'warn'}>{r.balance_type || '—'}</Pill> },
               { key: 'closing_balance', label: 'Closing balance', align: 'right', render: r => money(Math.abs(Number(r.closing_balance) || 0)) },
             ]} />
           )}
         </div>
-         <p className="mt-3 text-[11px] text-ink-faint">{lt('Account details (account number, IFSC, branch) are set when creating the ledger. Edits to existing bank ledgers are made in Tally Prime, same as the mobile app.')}</p>
+         <p className="mt-3 text-[11px] text-ink-faint">{lt('Account number, IFSC and branch come from Tally bank masters (same as mobile). Edits to existing ledgers are made in Tally Prime.')}</p>
       </Card>
     </Section>
   );
@@ -725,9 +747,97 @@ export function SettingsLanguage() {
 }
 
 /* ── Alerts ───────────────────────────────────────────────────────────────── */
+const ALERT_CHANNELS = ['push', 'email', 'whatsapp', 'sms'];
+const DEFAULT_ALERT_CHANNELS = { push: true, email: false, whatsapp: false, sms: false };
+const EXPIRY_DAY_OPTIONS = ['7 Days', '15 Days', '30 Days', '60 Days', '90 Days'];
+const EINVOICE_PROVIDERS = [
+  { value: 'nic', label: 'NIC (Government)' },
+  { value: 'cygnet', label: 'Cygnet' },
+  { value: 'clear', label: 'Clear (formerly ClearTax)' },
+  { value: 'ey', label: 'EY Tax Tech' },
+  { value: 'iris', label: 'IRIS Business' },
+  { value: 'masterindia', label: 'Masterindia' },
+];
+const EWB_GSP_OPTIONS = [
+  { value: 'nic', label: 'NIC Direct' },
+  { value: 'cleartax', label: 'Cleartax GSP' },
+  { value: 'masters', label: 'Masters India' },
+];
+
+function normalizeChannels(ch = {}) {
+  return {
+    push: !!(ch.push ?? ch.push_enabled ?? DEFAULT_ALERT_CHANNELS.push),
+    email: !!(ch.email ?? ch.email_enabled ?? DEFAULT_ALERT_CHANNELS.email),
+    whatsapp: !!(ch.whatsapp ?? ch.whatsapp_enabled ?? DEFAULT_ALERT_CHANNELS.whatsapp),
+    sms: !!(ch.sms ?? ch.sms_enabled ?? DEFAULT_ALERT_CHANNELS.sms),
+  };
+}
+
+function ChannelChips({ value, onChange, testid }) {
+  const lt = useLabelT();
+  const channels = normalizeChannels(value);
+  return (
+    <div data-testid={testid}>
+      <p className="mb-2 text-[12px] font-semibold text-ink">{lt('Channels')}</p>
+      <div className="flex flex-wrap gap-2">
+        {ALERT_CHANNELS.map(key => {
+          const active = !!channels[key];
+          return (
+            <button
+              key={key}
+              type="button"
+              data-testid={`${testid || 'channel'}-${key}`}
+              onClick={() => onChange({ ...channels, [key]: !active })}
+              className={`rounded-full border px-3 py-1.5 text-[12px] font-semibold capitalize ${
+                active ? 'border-ink bg-ink text-white' : 'border-line bg-paper text-ink'
+              }`}
+            >
+              {lt(key === 'push' ? 'Push' : key)}
+            </button>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
+function StepperBox({ label, value, sublabel, onChange, min = 1, max = 30, testid }) {
+  const lt = useLabelT();
+  const n = Number(value) || min;
+  return (
+    <div className="flex-1 rounded-xl border border-line bg-cream p-3 text-center" data-testid={testid}>
+      <p className="text-[11px] font-semibold text-ink-soft">{lt(label)}</p>
+      <div className="mt-2 flex items-center justify-between gap-2">
+        <Button disabled={n <= min} onClick={() => onChange(Math.max(min, n - 1))} data-testid={testid ? `${testid}-dec` : undefined}>−</Button>
+        <span className="min-w-[2rem] text-lg font-bold tabular-nums text-ink">{n}</span>
+        <Button disabled={n >= max} onClick={() => onChange(Math.min(max, n + 1))} data-testid={testid ? `${testid}-inc` : undefined}>+</Button>
+      </div>
+      {sublabel && <p className="mt-1 text-[10px] text-ink-faint">{lt(sublabel)}</p>}
+    </div>
+  );
+}
+
+function normalizeNotificationSettings(data = {}) {
+  return {
+    push_enabled: !!(data.push_enabled ?? data.push ?? true),
+    email_enabled: !!(data.email_enabled ?? data.email ?? true),
+    sms_enabled: !!(data.sms_enabled ?? data.sms ?? false),
+    whatsapp_enabled: !!(data.whatsapp_enabled ?? data.whatsapp ?? true),
+    digest: data.digest || 'Daily',
+    quiet_enabled: !!data.quiet_enabled,
+    quiet_from: data.quiet_from || '10:00 PM',
+    quiet_to: data.quiet_to || '07:00 AM',
+    quiet_saturday: !!(data.quiet_saturday ?? false),
+    quiet_sunday: data.quiet_sunday === undefined ? true : !!data.quiet_sunday,
+  };
+}
+
 export function SettingsNotificationChannels() {
   const lt = useLabelT();
-  const config = useRemoteConfig('/api/notification-settings', { push: true, email: true, sms: false, whatsapp: true, digest: 'Daily' });
+  const config = useRemoteConfig('/api/notification-settings', normalizeNotificationSettings(), {
+    select: (response) => normalizeNotificationSettings(response?.data || {}),
+    serialize: (value) => normalizeNotificationSettings(value),
+  });
   const s = config.value;
   const [pushBusy, setPushBusy] = useState(false);
   const [pushMsg, setPushMsg] = useState('');
@@ -746,25 +856,77 @@ export function SettingsNotificationChannels() {
       setPushBusy(false);
     }
   };
+  const patch = (partial) => config.setValue({ ...s, ...partial });
   return (
-    <Section title="Notification Channels" sub="Where alerts are delivered" testid="settings-notification-channels" actions={<SaveAction config={config} testid="notification-save" />}>
+    <Section title="Channels & Quiet Hours" sub="Where alerts are delivered and when to stay silent" testid="settings-notification-channels" actions={<SaveAction config={config} testid="notification-save" />}>
       <ConfigState config={config}>
       <Card>
-        <SettingRow title="In-app / push"><Toggle checked={!!s.push} onChange={v => config.setValue({ ...s, push: v })} testid="toggle-push" /></SettingRow>
+        <SettingRow title="In-app / push"><Toggle checked={!!s.push_enabled} onChange={v => patch({ push_enabled: v })} testid="toggle-push" /></SettingRow>
         <SettingRow title="Browser push (FCM)" desc={pushPerm === 'granted' ? lt('Permission granted') : pushPerm === 'denied' ? lt('Blocked in browser settings') : lt('Enable desktop notifications')}>
           <Button disabled={pushBusy || pushPerm === 'denied'} onClick={enableBrowserPush} data-testid="enable-browser-push">
             {pushBusy ? lt('Enabling…') : lt('Enable browser push')}
           </Button>
         </SettingRow>
         {pushMsg && <p className="px-5 pb-3 text-[13px] text-ink-soft">{pushMsg}</p>}
-        <SettingRow title="Email"><Toggle checked={!!s.email} onChange={v => config.setValue({ ...s, email: v })} testid="toggle-email" /></SettingRow>
-        <SettingRow title="SMS"><Toggle checked={!!s.sms} onChange={v => config.setValue({ ...s, sms: v })} testid="toggle-sms" /></SettingRow>
-        <SettingRow title="WhatsApp"><Toggle checked={!!s.whatsapp} onChange={v => config.setValue({ ...s, whatsapp: v })} testid="toggle-whatsapp" /></SettingRow>
+        <SettingRow title="Email"><Toggle checked={!!s.email_enabled} onChange={v => patch({ email_enabled: v })} testid="toggle-email" /></SettingRow>
+        <SettingRow title="SMS"><Toggle checked={!!s.sms_enabled} onChange={v => patch({ sms_enabled: v })} testid="toggle-sms" /></SettingRow>
+        <SettingRow title="WhatsApp"><Toggle checked={!!s.whatsapp_enabled} onChange={v => patch({ whatsapp_enabled: v })} testid="toggle-whatsapp" /></SettingRow>
         <SettingRow title="Summary digest">
-          <Select className="w-40" data-testid="digest-select" value={s.digest} onChange={e => config.setValue({ ...s, digest: e.target.value })}>
+          <Select className="w-40" data-testid="digest-select" value={s.digest} onChange={e => patch({ digest: e.target.value })}>
              {['Off', 'Daily', 'Weekly'].map(o => <option key={o} value={o}>{lt(o)}</option>)}
           </Select>
         </SettingRow>
+      </Card>
+      <Card>
+        <SettingRow title="Quiet Hours" desc="Mute non-critical alerts overnight">
+          <Toggle checked={!!s.quiet_enabled} onChange={v => patch({ quiet_enabled: v })} testid="toggle-quiet-hours" />
+        </SettingRow>
+        {s.quiet_enabled && (
+          <div className="space-y-4 border-t border-line px-5 py-4" data-testid="quiet-hours-body">
+            <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
+              <Field label="Start time">
+                <Input
+                  data-testid="quiet-from"
+                  value={s.quiet_from || ''}
+                  onChange={e => patch({ quiet_from: e.target.value })}
+                  placeholder={lt('10:00 PM')}
+                />
+              </Field>
+              <Field label="End time">
+                <Input
+                  data-testid="quiet-to"
+                  value={s.quiet_to || ''}
+                  onChange={e => patch({ quiet_to: e.target.value })}
+                  placeholder={lt('07:00 AM')}
+                />
+              </Field>
+            </div>
+            <div>
+              <p className="mb-2 text-[12px] font-semibold text-ink">{lt('Weekends')}</p>
+              <div className="flex flex-wrap gap-2">
+                {[
+                  { key: 'quiet_saturday', label: 'Saturday' },
+                  { key: 'quiet_sunday', label: 'Sunday' },
+                ].map(day => {
+                  const active = !!s[day.key];
+                  return (
+                    <button
+                      key={day.key}
+                      type="button"
+                      data-testid={`quiet-${day.key}`}
+                      onClick={() => patch({ [day.key]: !active })}
+                      className={`min-w-[7rem] flex-1 rounded-xl border px-3 py-2.5 text-[13px] font-semibold ${
+                        active ? 'border-ink bg-ink text-white' : 'border-line bg-paper text-ink'
+                      }`}
+                    >
+                      {lt(day.label)}
+                    </button>
+                  );
+                })}
+              </div>
+            </div>
+          </div>
+        )}
       </Card>
       </ConfigState>
     </Section>
@@ -1169,51 +1331,456 @@ export function SettingsPaymentReminders() {
   );
 }
 
+function defaultComplianceReminders() {
+  return {
+    gst: {
+      gstr1Days: 3,
+      gstr3bDays: 3,
+      autoPause: true,
+      channels: { ...DEFAULT_ALERT_CHANNELS, push: true },
+    },
+    einvoice: {
+      irnDays: 3,
+      channels: { ...DEFAULT_ALERT_CHANNELS, push: true },
+    },
+    ewb: {
+      expiryHours: 4,
+      channels: { ...DEFAULT_ALERT_CHANNELS, push: true },
+    },
+    other_taxes: {
+      tdsDays: 3,
+      vatDays: 3,
+      channels: { ...DEFAULT_ALERT_CHANNELS, push: true },
+    },
+  };
+}
+
+function normalizeComplianceReminders(raw = {}, legacyCompliance = {}) {
+  const defaults = defaultComplianceReminders();
+  const src = raw && typeof raw === 'object' ? raw : {};
+  const gstSrc = src.gst || {};
+  return {
+    gst: {
+      gstr1Days: Number(gstSrc.gstr1Days ?? legacyCompliance.gstr1FilingDays ?? defaults.gst.gstr1Days),
+      gstr3bDays: Number(gstSrc.gstr3bDays ?? legacyCompliance.gstr3bFilingDays ?? defaults.gst.gstr3bDays),
+      autoPause: gstSrc.autoPause === undefined ? defaults.gst.autoPause : !!gstSrc.autoPause,
+      channels: normalizeChannels(gstSrc.channels || defaults.gst.channels),
+    },
+    einvoice: {
+      irnDays: Number(src.einvoice?.irnDays ?? defaults.einvoice.irnDays),
+      channels: normalizeChannels(src.einvoice?.channels || defaults.einvoice.channels),
+    },
+    ewb: {
+      expiryHours: Number(src.ewb?.expiryHours ?? defaults.ewb.expiryHours),
+      channels: normalizeChannels(src.ewb?.channels || defaults.ewb.channels),
+    },
+    other_taxes: {
+      tdsDays: Number(src.other_taxes?.tdsDays ?? defaults.other_taxes.tdsDays),
+      vatDays: Number(src.other_taxes?.vatDays ?? defaults.other_taxes.vatDays),
+      channels: normalizeChannels(src.other_taxes?.channels || defaults.other_taxes.channels),
+    },
+  };
+}
+
 export function SettingsComplianceReminders() {
   const lt = useLabelT();
   const config = useRemoteConfig('/api/alert-settings', {
-    compliance: { gstr1FilingDays: 3, gstr3bFilingDays: 3 },
+    compliance_reminders: defaultComplianceReminders(),
+  }, {
+    select: (response) => {
+      const data = response?.data || {};
+      return {
+        ...data,
+        compliance_reminders: normalizeComplianceReminders(data.compliance_reminders, data.compliance),
+      };
+    },
+    serialize: (value) => ({
+      compliance_reminders: normalizeComplianceReminders(value.compliance_reminders),
+    }),
   });
-  const s = config.value.compliance || {};
-  const update = patch => config.setValue({ ...config.value, compliance: { ...s, ...patch } });
+  const reminders = normalizeComplianceReminders(config.value.compliance_reminders);
+  const setReminders = (patch) => {
+    config.setValue({
+      ...config.value,
+      compliance_reminders: normalizeComplianceReminders({ ...reminders, ...patch }),
+    });
+  };
+  const setGst = (patch) => setReminders({ gst: { ...reminders.gst, ...patch } });
+  const setEinv = (patch) => setReminders({ einvoice: { ...reminders.einvoice, ...patch } });
+  const setEwb = (patch) => setReminders({ ewb: { ...reminders.ewb, ...patch } });
+  const setOther = (patch) => setReminders({ other_taxes: { ...reminders.other_taxes, ...patch } });
+
   return (
-    <Section title="Compliance Reminders" sub="Return filing and tax due-date alerts" testid="settings-compliance-reminders" actions={<SaveAction config={config} testid="compliance-reminders-save" />}>
+    <Section
+      title="Compliance Reminders"
+      sub="GST, e-invoice, e-way bill, and other tax due-date alerts"
+      testid="settings-compliance-reminders"
+      actions={<SaveAction config={config} testid="compliance-reminders-save" />}
+    >
       <ConfigState config={config}>
-      <Card>
-         <SettingRow title="GST return reminders" desc="The scheduler uses the GSTR-1 and GSTR-3B lead times below."><Pill tone="pos">{lt('Enabled')}</Pill></SettingRow>
-        <SettingRow title="GSTR-1 lead time (days)"><Input type="number" className="w-24" data-testid="lead-time" value={s.gstr1FilingDays ?? 3} onChange={e => update({ gstr1FilingDays: Number(e.target.value) })} /></SettingRow>
-        <SettingRow title="GSTR-3B lead time (days)"><Input type="number" className="w-24" value={s.gstr3bFilingDays ?? 3} onChange={e => update({ gstr3bFilingDays: Number(e.target.value) })} /></SettingRow>
-         <SettingRow title="TDS / TCS and advance tax reminders" desc="No scheduler contract is available for these reminder types."><Pill tone="neutral">{lt('Not yet available on web')}</Pill></SettingRow>
-      </Card>
-      <Panel title="Upcoming due dates">
-        <div data-testid="compliance-due-table"><Empty message="Upcoming due dates unavailable" hint="The backend does not expose a compliance due-date calendar." /></div>
-      </Panel>
+        <Card className="space-y-4 p-5" data-testid="compliance-gst-card">
+          <p className="text-sm font-bold text-ink">{lt('GST')}</p>
+          <div className="flex flex-col gap-3 sm:flex-row">
+            <StepperBox label="GSTR-1 filing" value={reminders.gst.gstr1Days} sublabel="Days before due" onChange={v => setGst({ gstr1Days: v })} testid="lead-time" />
+            <StepperBox label="GSTR-3B filing" value={reminders.gst.gstr3bDays} sublabel="Days before due" onChange={v => setGst({ gstr3bDays: v })} testid="gstr3b-days" />
+          </div>
+          <SettingRow title="Auto-pause" desc="If No Sales">
+            <Toggle checked={!!reminders.gst.autoPause} onChange={v => setGst({ autoPause: v })} testid="gst-auto-pause" />
+          </SettingRow>
+          <ChannelChips value={reminders.gst.channels} onChange={channels => setGst({ channels })} testid="gst-channels" />
+        </Card>
+
+        <Card className="space-y-4 p-5" data-testid="compliance-einvoice-card">
+          <p className="text-sm font-bold text-ink">{lt('E-Invoice')}</p>
+          <StepperBox label="IRN error digest" value={reminders.einvoice.irnDays} sublabel="Days before due" onChange={v => setEinv({ irnDays: v })} testid="einvoice-irn-days" />
+          <ChannelChips value={reminders.einvoice.channels} onChange={channels => setEinv({ channels })} testid="einvoice-channels" />
+        </Card>
+
+        <Card className="space-y-4 p-5" data-testid="compliance-ewb-card">
+          <p className="text-sm font-bold text-ink">{lt('E-Way Bill')}</p>
+          <StepperBox label="Expiry reminder" value={reminders.ewb.expiryHours} sublabel="h before validity end" onChange={v => setEwb({ expiryHours: v })} min={1} max={72} testid="ewb-expiry-hours" />
+          <ChannelChips value={reminders.ewb.channels} onChange={channels => setEwb({ channels })} testid="ewb-channels" />
+        </Card>
+
+        <Card className="space-y-4 p-5" data-testid="compliance-other-taxes-card">
+          <p className="text-sm font-bold text-ink">{lt('Other Taxes')}</p>
+          <div className="flex flex-col gap-3 sm:flex-row">
+            <StepperBox label="TDS payment" value={reminders.other_taxes.tdsDays} sublabel="Days before 7th" onChange={v => setOther({ tdsDays: v })} testid="tds-days" />
+            <StepperBox label="VAT return" value={reminders.other_taxes.vatDays} sublabel="Days before due" onChange={v => setOther({ vatDays: v })} testid="vat-days" />
+          </div>
+          <ChannelChips value={reminders.other_taxes.channels} onChange={channels => setOther({ channels })} testid="other-tax-channels" />
+        </Card>
       </ConfigState>
     </Section>
   );
 }
 
+function defaultStockAlerts() {
+  return {
+    category: 'group',
+    selected_entries: [],
+    include_negative: false,
+    expiry_days: '30 Days',
+    tracked_batches: true,
+    group_by_warehouse: false,
+    channels: { push: true, email: false, whatsapp: true, sms: false },
+    frequency: 'daily',
+    send_time: '05:00 PM',
+  };
+}
+
+function normalizeStockAlerts(raw = {}) {
+  const defaults = defaultStockAlerts();
+  const entries = Array.isArray(raw.selected_entries)
+    ? raw.selected_entries
+      .map(e => ({
+        name: String(e?.name || '').trim(),
+        reorderPoint: Math.max(0, Number(e?.reorderPoint ?? e?.reorder_point ?? 5) || 0),
+      }))
+      .filter(e => e.name)
+    : [];
+  const category = raw.category === 'item' ? 'item' : 'group';
+  const frequency = ['immediate', 'daily', 'weekly'].includes(raw.frequency) ? raw.frequency : defaults.frequency;
+  const expiry = EXPIRY_DAY_OPTIONS.includes(raw.expiry_days)
+    ? raw.expiry_days
+    : (typeof raw.expiry_days === 'number' ? `${raw.expiry_days} Days` : defaults.expiry_days);
+  return {
+    category,
+    selected_entries: entries,
+    include_negative: !!raw.include_negative,
+    expiry_days: expiry,
+    tracked_batches: raw.tracked_batches === undefined ? defaults.tracked_batches : !!raw.tracked_batches,
+    group_by_warehouse: !!raw.group_by_warehouse,
+    channels: normalizeChannels(raw.channels || defaults.channels),
+    frequency,
+    send_time: raw.send_time || defaults.send_time,
+  };
+}
+
 export function SettingsStockAlerts() {
+  const lt = useLabelT();
   const { selectedCompany } = useAuth();
   const guid = selectedCompany?.guid;
-  const config = useRemoteConfig(guid ? `/api/inventory/settings?companyGuid=${encodeURIComponent(guid)}` : '', {}, {
-    method: 'POST',
-    select: response => response?.data?.settings || {},
-    savePath: guid ? `/api/inventory/settings?companyGuid=${encodeURIComponent(guid)}` : '',
+  const config = useRemoteConfig('/api/alert-settings', {
+    stock_alerts: defaultStockAlerts(),
+  }, {
+    select: (response) => {
+      const data = response?.data || {};
+      return {
+        ...data,
+        stock_alerts: normalizeStockAlerts(data.stock_alerts),
+      };
+    },
+    serialize: (value) => ({
+      stock_alerts: normalizeStockAlerts(value.stock_alerts),
+    }),
   });
-  const s = config.value;
-  const updateAlert = (key, patch) => config.setValue({ ...s, [key]: { ...(s[key] || {}), ...patch } });
+  const stock = normalizeStockAlerts(config.value.stock_alerts);
+  const setStock = (patch) => {
+    config.setValue({
+      ...config.value,
+      stock_alerts: normalizeStockAlerts({ ...stock, ...patch }),
+    });
+  };
+
+  const [pickerOpen, setPickerOpen] = useState(false);
+  const [draftNames, setDraftNames] = useState([]);
+  const [options, setOptions] = useState([]);
+  const [optionsLoading, setOptionsLoading] = useState(false);
+  const [search, setSearch] = useState('');
+
+  const openPicker = async () => {
+    setDraftNames(stock.selected_entries.map(e => e.name));
+    setSearch('');
+    setPickerOpen(true);
+    if (!guid) {
+      setOptions([]);
+      return;
+    }
+    setOptionsLoading(true);
+    try {
+      if (stock.category === 'item') {
+        const res = await api.fetchStocks({ companyGuid: guid, limit: 500, pageSize: 500 });
+        const rows = res?.data?.stocks || [];
+        setOptions(
+          [...new Set(rows.map(r => String(typeof r === 'string' ? r : r?.name || '').trim()).filter(Boolean))]
+            .sort((a, b) => a.localeCompare(b)),
+        );
+      } else {
+        const res = await api.fetchStockGroups(guid);
+        const groups = res?.data || [];
+        setOptions(
+          [...new Set((Array.isArray(groups) ? groups : []).map(g => String(typeof g === 'string' ? g : g?.name || '').trim()).filter(Boolean))]
+            .sort((a, b) => a.localeCompare(b)),
+        );
+      }
+    } catch {
+      setOptions([]);
+    } finally {
+      setOptionsLoading(false);
+    }
+  };
+
+  const filteredOptions = search.trim()
+    ? options.filter(n => n.toLowerCase().includes(search.trim().toLowerCase()))
+    : options;
+
+  const updateReorder = (name, delta) => {
+    setStock({
+      selected_entries: stock.selected_entries.map(e => (
+        e.name === name ? { ...e, reorderPoint: Math.max(0, e.reorderPoint + delta) } : e
+      )),
+    });
+  };
+
   return (
-    <Section title="Stock Alerts" sub="Inventory warnings and thresholds" testid="settings-stock-alerts" actions={<SaveAction config={config} testid="stock-alerts-save" />}>
+    <Section
+      title="Low Stock & Expiry Alerts"
+      sub="Track groups or items with reorder points, expiry, and delivery schedule"
+      testid="settings-stock-alerts"
+      actions={<SaveAction config={config} testid="stock-alerts-save" />}
+    >
       <ConfigState config={config}>
-      <Card>
-        <SettingRow title="Low stock in-app alerts"><Toggle checked={!!s.low_stock_alerts?.inApp} onChange={v => updateAlert('low_stock_alerts', { inApp: v })} testid="toggle-low-stock" /></SettingRow>
-        <SettingRow title="Negative stock in-app alerts"><Toggle checked={!!s.negative_stock_alerts?.inApp} onChange={v => updateAlert('negative_stock_alerts', { inApp: v })} /></SettingRow>
-        <SettingRow title="Expiry in-app alerts"><Toggle checked={!!s.expiry_alerts?.inApp} onChange={v => updateAlert('expiry_alerts', { inApp: v })} /></SettingRow>
-        <SettingRow title="Expiry lead time (days)"><Input type="number" className="w-24" value={s.expiry_alerts?.daysBefore ?? 30} onChange={e => updateAlert('expiry_alerts', { daysBefore: Number(e.target.value) })} /></SettingRow>
-        <SettingRow title="Default low stock level"><Input type="number" className="w-24" value={s.default_low_stock_level ?? 20} onChange={e => config.setValue({ ...s, default_low_stock_level: Number(e.target.value) })} /></SettingRow>
-      </Card>
+        <Card className="space-y-4 p-5" data-testid="stock-alerts-low-card">
+          <p className="text-sm font-bold text-ink">{lt('Low Stock')}</p>
+          <div>
+            <p className="mb-2 text-[12px] font-semibold text-ink">{lt('Alert Category')}</p>
+            <div className="flex flex-wrap gap-2">
+              {[
+                { id: 'group', label: 'Group wise' },
+                { id: 'item', label: 'Item wise' },
+              ].map(opt => (
+                <button
+                  key={opt.id}
+                  type="button"
+                  data-testid={`stock-category-${opt.id}`}
+                  onClick={() => setStock({ category: opt.id, selected_entries: [] })}
+                  className={`rounded-full border px-3 py-1.5 text-[12px] font-semibold ${
+                    stock.category === opt.id ? 'border-ink bg-ink text-white' : 'border-line bg-paper text-ink'
+                  }`}
+                >
+                  {lt(opt.label)}
+                </button>
+              ))}
+            </div>
+          </div>
+
+          <Button className="w-full justify-between" data-testid="stock-alerts-select" onClick={openPicker}>
+            <span>
+              {stock.selected_entries.length === 0
+                ? lt(stock.category === 'group' ? 'Select Groups' : 'Select Items')
+                : lt(`${stock.selected_entries.length} ${stock.category === 'group' ? 'Group' : 'Item'}${stock.selected_entries.length === 1 ? '' : 's'} selected`)}
+            </span>
+            <ChevronDown size={14} />
+          </Button>
+
+          {stock.selected_entries.length > 0 && (
+            <div className="overflow-hidden rounded-xl border border-line" data-testid="stock-alerts-entries">
+              <div className="flex items-center justify-between bg-cream px-3 py-2 text-[10px] font-bold uppercase tracking-wide text-ink-faint">
+                <span>{lt(stock.category === 'group' ? 'Group' : 'Item')}</span>
+                <span className="mr-10">{lt('Reorder Pt.')}</span>
+              </div>
+              {stock.selected_entries.map((entry, idx) => (
+                <div key={entry.name} className={`flex items-center gap-2 px-3 py-2 ${idx ? 'border-t border-line' : ''}`}>
+                  <span className="min-w-0 flex-1 truncate text-[13px] font-semibold text-ink">{entry.name}</span>
+                  <div className="flex items-center rounded-lg border border-line bg-cream">
+                    <button type="button" className="px-2 py-1 text-ink" onClick={() => updateReorder(entry.name, -1)} data-testid={`stock-reorder-dec-${idx}`}>−</button>
+                    <span className="w-8 text-center text-[13px] font-bold tabular-nums">{entry.reorderPoint}</span>
+                    <button type="button" className="px-2 py-1 text-ink" onClick={() => updateReorder(entry.name, 1)} data-testid={`stock-reorder-inc-${idx}`}>+</button>
+                  </div>
+                  <button
+                    type="button"
+                    aria-label={lt('Remove')}
+                    className="rounded-lg border border-line p-1.5 text-ink-faint hover:text-ink"
+                    onClick={() => setStock({ selected_entries: stock.selected_entries.filter(e => e.name !== entry.name) })}
+                    data-testid={`stock-entry-remove-${idx}`}
+                  >
+                    <X size={14} />
+                  </button>
+                </div>
+              ))}
+            </div>
+          )}
+
+          <SettingRow title="Include Negative Stock">
+            <Toggle checked={!!stock.include_negative} onChange={v => setStock({ include_negative: v })} testid="toggle-include-negative" />
+          </SettingRow>
+        </Card>
+
+        <Card className="space-y-4 p-5" data-testid="stock-alerts-expiry-card">
+          <p className="text-sm font-bold text-ink">{lt('Expiry Alerts')}</p>
+          <Field label="Alert Before">
+            <Select
+              className="w-full max-w-xs"
+              data-testid="stock-expiry-days"
+              value={stock.expiry_days}
+              onChange={e => setStock({ expiry_days: e.target.value })}
+            >
+              {EXPIRY_DAY_OPTIONS.map(o => <option key={o} value={o}>{lt(o)}</option>)}
+            </Select>
+          </Field>
+          <div className="flex flex-wrap gap-2">
+            {[
+              { key: 'tracked_batches', label: 'Only track batches' },
+              { key: 'group_by_warehouse', label: 'Group by warehouse' },
+            ].map(opt => {
+              const active = !!stock[opt.key];
+              return (
+                <button
+                  key={opt.key}
+                  type="button"
+                  data-testid={`stock-${opt.key}`}
+                  onClick={() => setStock({ [opt.key]: !active })}
+                  className={`rounded-full border px-3 py-1.5 text-[12px] font-semibold ${
+                    active ? 'border-ink bg-ink text-white' : 'border-line bg-paper text-ink'
+                  }`}
+                >
+                  {lt(opt.label)}
+                </button>
+              );
+            })}
+          </div>
+        </Card>
+
+        <Card className="space-y-4 p-5" data-testid="stock-alerts-delivery-card">
+          <p className="text-sm font-bold text-ink">{lt('Delivery & Schedule')}</p>
+          <ChannelChips value={stock.channels} onChange={channels => setStock({ channels })} testid="stock-channels" />
+          <div>
+            <p className="mb-2 text-[12px] font-semibold text-ink">{lt('Frequency')}</p>
+            <div className="flex flex-wrap gap-2">
+              {[
+                { id: 'immediate', label: 'Immediate' },
+                { id: 'daily', label: 'Daily' },
+                { id: 'weekly', label: 'Weekly' },
+              ].map(opt => (
+                <button
+                  key={opt.id}
+                  type="button"
+                  data-testid={`stock-freq-${opt.id}`}
+                  onClick={() => setStock({ frequency: opt.id })}
+                  className={`rounded-full border px-3 py-1.5 text-[12px] font-semibold ${
+                    stock.frequency === opt.id ? 'border-ink bg-ink text-white' : 'border-line bg-paper text-ink'
+                  }`}
+                >
+                  {lt(opt.label)}
+                </button>
+              ))}
+            </div>
+          </div>
+          {(stock.frequency === 'daily' || stock.frequency === 'weekly') && (
+            <Field label="Send Time">
+              <Input
+                data-testid="stock-send-time"
+                value={stock.send_time || ''}
+                onChange={e => setStock({ send_time: e.target.value })}
+                placeholder={lt('05:00 PM')}
+              />
+            </Field>
+          )}
+        </Card>
       </ConfigState>
+
+      {pickerOpen && (
+        <Modal
+          open
+          onClose={() => setPickerOpen(false)}
+          title={lt(stock.category === 'group' ? 'Select Groups' : 'Select Items')}
+          testid="stock-alerts-picker-modal"
+          footer={(
+            <div className="flex justify-end gap-2">
+              <Button onClick={() => setPickerOpen(false)}>{lt('Cancel')}</Button>
+              <Button
+                variant="primary"
+                data-testid="stock-alerts-picker-done"
+                onClick={() => {
+                  const prev = new Map(stock.selected_entries.map(e => [e.name, e]));
+                  setStock({
+                    selected_entries: draftNames.map(name => prev.get(name) || { name, reorderPoint: 5 }),
+                  });
+                  setPickerOpen(false);
+                }}
+              >
+                {lt('Done')}{draftNames.length ? ` (${draftNames.length})` : ''}
+              </Button>
+            </div>
+          )}
+        >
+          <div className="mb-3 flex items-center gap-2 rounded-xl border border-line bg-cream px-3 py-2">
+            <Search size={14} className="text-ink-faint" />
+            <input
+              value={search}
+              onChange={e => setSearch(e.target.value)}
+              placeholder={lt(stock.category === 'group' ? 'Search groups…' : 'Search items…')}
+              data-testid="stock-alerts-picker-search"
+              className="h-8 w-full bg-transparent text-[13px] outline-none placeholder:text-ink-faint"
+            />
+          </div>
+          {optionsLoading ? (
+            <p className="py-6 text-center text-[13px] text-ink-faint">{lt('Loading…')}</p>
+          ) : filteredOptions.length === 0 ? (
+            <Empty message={stock.category === 'group' ? 'No stock groups found' : 'No stock items found'} />
+          ) : (
+            <div className="max-h-[45vh] space-y-1 overflow-y-auto">
+              {filteredOptions.map(name => {
+                const checked = draftNames.includes(name);
+                return (
+                  <button
+                    key={name}
+                    type="button"
+                    onClick={() => setDraftNames(prev => (checked ? prev.filter(n => n !== name) : [...prev, name]))}
+                    className={`flex w-full items-center gap-2 rounded-lg px-3 py-2 text-left text-[13px] ${checked ? 'bg-cream font-semibold text-ink' : 'text-ink-soft hover:bg-cream'}`}
+                  >
+                    <span className={`flex h-4 w-4 items-center justify-center rounded border ${checked ? 'border-ink bg-ink text-white' : 'border-line-strong'}`}>
+                      {checked && <Check size={11} strokeWidth={3} />}
+                    </span>
+                    <span className="truncate">{name}</span>
+                  </button>
+                );
+              })}
+            </div>
+          )}
+        </Modal>
+      )}
     </Section>
   );
 }
@@ -1230,28 +1797,131 @@ export function SettingsEInvoice() {
   const compliance = useRemoteConfig(guid ? `/api/company/${encodeURIComponent(guid)}/compliance-config` : '', {
     e_invoice_applicable: 'not_applicable', e_invoice_mode: 'manual',
   }, { method: 'POST' });
-  const integration = useRemoteConfig('/api/integration-settings', { einvoice: { gstin: '', username: '', client_id: '', client_secret: '' } });
+  const integration = useRemoteConfig('/api/integration-settings', {
+    einvoice: { provider: 'nic', gstin: '', username: '', password: '', client_id: '', client_secret: '' },
+  }, {
+    select: (response) => {
+      const data = response?.data || {};
+      const ei = data.einvoice || {};
+      return {
+        ...data,
+        einvoice: {
+          provider: ei.provider || 'nic',
+          gstin: ei.gstin || '',
+          username: ei.username || '',
+          password: ei.password || '',
+          client_id: ei.client_id || '',
+          client_secret: ei.client_secret || '',
+        },
+      };
+    },
+    serialize: (value) => ({
+      einvoice: {
+        ...(value.einvoice || {}),
+        connected: false,
+      },
+    }),
+  });
   const creds = integration.value.einvoice || {};
+  const setCreds = (patch) => integration.setValue({
+    ...integration.value,
+    einvoice: { ...creds, ...patch },
+  });
+  const applicable = compliance.value.e_invoice_applicable || 'not_applicable';
   return (
     <Section title="E-Invoice Settings" sub="IRN generation via your GSP" testid="settings-einvoice">
       <ConfigState config={compliance}>
-      <Card>
-        <SettingRow title="Applicability">
-          <Select className="w-48" data-testid="toggle-einvoice" value={compliance.value.e_invoice_applicable} onChange={e => compliance.setValue({ ...compliance.value, e_invoice_applicable: e.target.value })}>
-             <option value="not_applicable">{lt('Not applicable')}</option><option value="applicable_configured">{lt('Applicable and configured')}</option>
-          </Select>
-        </SettingRow>
-         <SettingRow title="Generation mode"><Select className="w-48" value={compliance.value.e_invoice_mode} onChange={e => compliance.setValue({ ...compliance.value, e_invoice_mode: e.target.value })}><option value="manual">{lt('Manual')}</option><option value="auto">{lt('Automatic')}</option></Select></SettingRow>
-        <div className="flex justify-end p-4"><SaveAction config={compliance} testid="einvoice-compliance-save" /></div>
+      <Card className="space-y-3 p-5">
+        <p className="text-sm font-bold text-ink">{lt('Applicability')}</p>
+        {[
+          { value: 'not_applicable', label: 'Not Applicable', sub: 'E-Invoice not required for this business' },
+          { value: 'applicable_not_configured', label: 'Applicable — Not Configured', sub: 'Required but IRP credentials not set up yet' },
+          { value: 'applicable_configured', label: 'Applicable — Configured', sub: 'IRP integrated, IRN generation enabled' },
+        ].map(opt => (
+          <button
+            key={opt.value}
+            type="button"
+            data-testid={`einvoice-applicable-${opt.value}`}
+            onClick={() => compliance.setValue({ ...compliance.value, e_invoice_applicable: opt.value })}
+            className={`flex w-full flex-col rounded-xl border px-4 py-3 text-left ${
+              applicable === opt.value ? 'border-ink bg-cream' : 'border-line bg-paper hover:bg-cream'
+            }`}
+          >
+            <span className="text-[13px] font-semibold text-ink">{lt(opt.label)}</span>
+            <span className="text-[12px] text-ink-soft">{lt(opt.sub)}</span>
+          </button>
+        ))}
+        {applicable === 'applicable_configured' && (
+          <SettingRow title="Generation mode">
+            <Select
+              className="w-48"
+              data-testid="toggle-einvoice"
+              value={compliance.value.e_invoice_mode || 'manual'}
+              onChange={e => compliance.setValue({ ...compliance.value, e_invoice_mode: e.target.value })}
+            >
+              <option value="manual">{lt('Manual')}</option>
+              <option value="auto">{lt('Automatic')}</option>
+            </Select>
+          </SettingRow>
+        )}
+        <div className="flex justify-end"><SaveAction config={compliance} testid="einvoice-compliance-save" /></div>
       </Card>
       </ConfigState>
       <ConfigState config={integration}>
-        <Card className="p-5 grid grid-cols-1 sm:grid-cols-2 gap-4">
-          <Field label="GSTIN"><Input value={creds.gstin || ''} onChange={e => integration.setValue({ ...integration.value, einvoice: { ...creds, gstin: e.target.value } })} /></Field>
-          <Field label="API username"><Input value={creds.username || ''} onChange={e => integration.setValue({ ...integration.value, einvoice: { ...creds, username: e.target.value } })} /></Field>
-          <Field label="Client ID"><Input data-testid="gsp-select" value={creds.client_id || ''} onChange={e => integration.setValue({ ...integration.value, einvoice: { ...creds, client_id: e.target.value } })} /></Field>
-          <Field label="Client secret"><Input type="password" value={creds.client_secret || ''} onChange={e => integration.setValue({ ...integration.value, einvoice: { ...creds, client_secret: e.target.value } })} /></Field>
-          <div className="sm:col-span-2 flex justify-end"><SaveAction config={integration} testid="einvoice-credentials-save" /></div>
+        <Card className="grid grid-cols-1 gap-4 p-5 sm:grid-cols-2">
+          <Field label="IRP Provider">
+            <Select
+              className="w-full"
+              data-testid="einvoice-provider"
+              value={creds.provider || 'nic'}
+              onChange={e => setCreds({ provider: e.target.value })}
+            >
+              {EINVOICE_PROVIDERS.map(p => <option key={p.value} value={p.value}>{lt(p.label)}</option>)}
+            </Select>
+          </Field>
+          <Field label="GSTIN">
+            <Input
+              data-testid="einvoice-gstin"
+              value={creds.gstin || ''}
+              onChange={e => setCreds({ gstin: e.target.value.toUpperCase() })}
+              placeholder={lt('15-digit GSTIN')}
+            />
+          </Field>
+          <Field label="API username">
+            <Input
+              value={creds.username || ''}
+              onChange={e => setCreds({ username: e.target.value })}
+              placeholder={lt('Portal username')}
+            />
+          </Field>
+          <Field label="Password">
+            <Input
+              type="password"
+              data-testid="einvoice-password"
+              value={creds.password || ''}
+              onChange={e => setCreds({ password: e.target.value })}
+              placeholder={lt('Portal password')}
+              autoComplete="new-password"
+            />
+          </Field>
+          <Field label="Client ID">
+            <Input
+              data-testid="gsp-select"
+              value={creds.client_id || ''}
+              onChange={e => setCreds({ client_id: e.target.value })}
+              placeholder={lt('API Client ID')}
+            />
+          </Field>
+          <Field label="Client secret">
+            <Input
+              type="password"
+              value={creds.client_secret || ''}
+              onChange={e => setCreds({ client_secret: e.target.value })}
+              placeholder={lt('API Client Secret')}
+              autoComplete="new-password"
+            />
+          </Field>
+          <div className="flex justify-end sm:col-span-2"><SaveAction config={integration} testid="einvoice-credentials-save" /></div>
         </Card>
       </ConfigState>
     </Section>
@@ -1265,22 +1935,131 @@ export function SettingsEWB() {
   const compliance = useRemoteConfig(guid ? `/api/company/${encodeURIComponent(guid)}/compliance-config` : '', {
     e_way_bill_applicable: 'not_applicable', e_way_bill_mode: 'manual',
   }, { method: 'POST' });
-  const integration = useRemoteConfig('/api/integration-settings', { ewaybill: { gstin: '', username: '' } });
-  const creds = integration.value.ewaybill || {};
+  const integration = useRemoteConfig('/api/integration-settings', {
+    ewb: { gsp: 'nic', gstin: '', username: '', password: '', client_id: '', client_secret: '' },
+  }, {
+    select: (response) => {
+      const data = response?.data || {};
+      const ewb = data.ewb || data.ewaybill || {};
+      return {
+        ...data,
+        ewb: {
+          gsp: ewb.gsp || ewb.provider || 'nic',
+          gstin: ewb.gstin || '',
+          username: ewb.username || '',
+          password: ewb.password || '',
+          client_id: ewb.client_id || '',
+          client_secret: ewb.client_secret || '',
+        },
+      };
+    },
+    serialize: (value) => ({
+      ewb: {
+        ...(value.ewb || {}),
+        connected: false,
+      },
+    }),
+  });
+  const creds = integration.value.ewb || {};
+  const setCreds = (patch) => integration.setValue({
+    ...integration.value,
+    ewb: { ...creds, ...patch },
+  });
+  const applicable = compliance.value.e_way_bill_applicable || 'not_applicable';
   return (
     <Section title="E-Way Bill Settings" sub="Consignment rules and transporter defaults" testid="settings-ewb">
       <ConfigState config={compliance}>
-      <Card>
-         <SettingRow title="Applicability"><Select className="w-48" data-testid="toggle-ewb" value={compliance.value.e_way_bill_applicable} onChange={e => compliance.setValue({ ...compliance.value, e_way_bill_applicable: e.target.value })}><option value="not_applicable">{lt('Not applicable')}</option><option value="applicable_configured">{lt('Applicable and configured')}</option></Select></SettingRow>
-         <SettingRow title="Generation mode"><Select className="w-48" value={compliance.value.e_way_bill_mode} onChange={e => compliance.setValue({ ...compliance.value, e_way_bill_mode: e.target.value })}><option value="manual">{lt('Manual')}</option><option value="auto">{lt('Automatic')}</option></Select></SettingRow>
-        <div className="flex justify-end p-4"><SaveAction config={compliance} testid="ewb-compliance-save" /></div>
+      <Card className="space-y-3 p-5">
+        <p className="text-sm font-bold text-ink">{lt('Applicability')}</p>
+        {[
+          { value: 'not_applicable', label: 'Not Applicable', sub: 'No goods movement or below threshold' },
+          { value: 'applicable_not_configured', label: 'Applicable — Not Configured', sub: 'Required but NIC EWB credentials not set up yet' },
+          { value: 'applicable_configured', label: 'Applicable — Configured', sub: 'EWB portal integrated, generation enabled' },
+        ].map(opt => (
+          <button
+            key={opt.value}
+            type="button"
+            data-testid={`ewb-applicable-${opt.value}`}
+            onClick={() => compliance.setValue({ ...compliance.value, e_way_bill_applicable: opt.value })}
+            className={`flex w-full flex-col rounded-xl border px-4 py-3 text-left ${
+              applicable === opt.value ? 'border-ink bg-cream' : 'border-line bg-paper hover:bg-cream'
+            }`}
+          >
+            <span className="text-[13px] font-semibold text-ink">{lt(opt.label)}</span>
+            <span className="text-[12px] text-ink-soft">{lt(opt.sub)}</span>
+          </button>
+        ))}
+        {applicable === 'applicable_configured' && (
+          <SettingRow title="Generation mode">
+            <Select
+              className="w-56"
+              data-testid="toggle-ewb"
+              value={compliance.value.e_way_bill_mode || 'manual'}
+              onChange={e => compliance.setValue({ ...compliance.value, e_way_bill_mode: e.target.value })}
+            >
+              <option value="manual">{lt('Manual')}</option>
+              <option value="auto">{lt('Auto when details ready')}</option>
+              <option value="ask_after_irn">{lt('Ask after IRN')}</option>
+            </Select>
+          </SettingRow>
+        )}
+        <div className="flex justify-end"><SaveAction config={compliance} testid="ewb-compliance-save" /></div>
       </Card>
       </ConfigState>
       <ConfigState config={integration}>
-        <Card className="p-5 grid grid-cols-1 sm:grid-cols-2 gap-4">
-          <Field label="GSTIN"><Input value={creds.gstin || ''} onChange={e => integration.setValue({ ...integration.value, ewaybill: { ...creds, gstin: e.target.value } })} /></Field>
-          <Field label="API username"><Input value={creds.username || ''} onChange={e => integration.setValue({ ...integration.value, ewaybill: { ...creds, username: e.target.value } })} /></Field>
-          <div className="sm:col-span-2 flex justify-end"><SaveAction config={integration} testid="ewb-credentials-save" /></div>
+        <Card className="grid grid-cols-1 gap-4 p-5 sm:grid-cols-2">
+          <Field label="GSP Provider">
+            <Select
+              className="w-full"
+              data-testid="ewb-gsp"
+              value={creds.gsp || 'nic'}
+              onChange={e => setCreds({ gsp: e.target.value })}
+            >
+              {EWB_GSP_OPTIONS.map(p => <option key={p.value} value={p.value}>{lt(p.label)}</option>)}
+            </Select>
+          </Field>
+          <Field label="GSTIN">
+            <Input
+              data-testid="ewb-gstin"
+              value={creds.gstin || ''}
+              onChange={e => setCreds({ gstin: e.target.value.toUpperCase() })}
+              placeholder={lt('15-digit GSTIN')}
+            />
+          </Field>
+          <Field label="API username">
+            <Input
+              value={creds.username || ''}
+              onChange={e => setCreds({ username: e.target.value })}
+              placeholder={lt('Portal username')}
+            />
+          </Field>
+          <Field label="Password">
+            <Input
+              type="password"
+              data-testid="ewb-password"
+              value={creds.password || ''}
+              onChange={e => setCreds({ password: e.target.value })}
+              placeholder={lt('Portal password')}
+              autoComplete="new-password"
+            />
+          </Field>
+          <Field label="Client ID">
+            <Input
+              value={creds.client_id || ''}
+              onChange={e => setCreds({ client_id: e.target.value })}
+              placeholder={lt('API Client ID')}
+            />
+          </Field>
+          <Field label="Client secret">
+            <Input
+              type="password"
+              value={creds.client_secret || ''}
+              onChange={e => setCreds({ client_secret: e.target.value })}
+              placeholder={lt('API Client Secret')}
+              autoComplete="new-password"
+            />
+          </Field>
+          <div className="flex justify-end sm:col-span-2"><SaveAction config={integration} testid="ewb-credentials-save" /></div>
         </Card>
       </ConfigState>
     </Section>

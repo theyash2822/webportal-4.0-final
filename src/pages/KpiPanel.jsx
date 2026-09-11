@@ -7,6 +7,7 @@ import { Drawer, Button, StatGrid, DataTable, Pill, Tabs, Panel, Empty, Toggle, 
 import { useAuth } from '../contexts/AuthContext';
 import api from '../services/api';
 import { useFmt, useCompanyMeta, VoucherDrawer } from './shared';
+import { formatBankCardNumber, maskBankAccountNo } from '../utils/voucherConfig';
 
 const num = v => Number(v || 0);
 const sum = (arr, key = 'amount') => arr.reduce((total, row) => total + num(row[key]), 0);
@@ -189,7 +190,16 @@ export default function KpiPanel({ metric, onClose }) {
         <DataTable testid="kpi-bank-balance-table" rows={banks} onRowClick={r => setOpenBank(openBank === r.id ? null : r.id)} columns={[
           { key: 'name', label: 'Account', render: r => <span className="font-medium">{r.name}</span> },
           { key: 'bank_name', label: 'Bank', render: r => r.bank_name || r.parent || '—' },
-          { key: 'account_number', label: 'Account no.', render: r => r.account_number || '—' },
+          {
+            key: 'account_number',
+            label: 'Account no.',
+            render: r => {
+              const ac = r.account_number || r.accountNo || '';
+              if (!ac) return <span className="text-ink-faint">{lt('A/c not in sync yet')}</span>;
+              return <span className="font-mono text-[12px] tracking-wide">{formatBankCardNumber(ac) || maskBankAccountNo(ac)}</span>;
+            },
+          },
+          { key: 'ifsc', label: 'IFSC', render: r => r.ifsc || r.ifsc_code || '—' },
           { key: 'balance', label: 'Balance', align: 'right', render: r => <span className={r.balance < 0 ? 'font-semibold text-neg' : 'font-semibold'}>{money(r.balance)}</span> },
         ]} />
         {open && (

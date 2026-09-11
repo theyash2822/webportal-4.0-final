@@ -74,7 +74,7 @@ export const SETTINGS_SECTIONS = [
   {
     label: 'Alerts',
     items: [
-      { label: 'Notification Channels', to: '/settings/notification-channels' },
+      { label: 'Channels & Quiet Hours', to: '/settings/notification-channels' },
       { label: 'Payment Reminders', to: '/settings/payment-reminders' },
       { label: 'Compliance Reminders', to: '/settings/compliance-reminders' },
       { label: 'Stock Alerts', to: '/settings/stock-alerts' },

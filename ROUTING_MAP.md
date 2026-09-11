@@ -68,7 +68,13 @@ Source: `src/App.jsx` (Web Portal 3.0 routes, Vite)
 | /ai-insights | src/pages/masters.jsx |
 | /notifications | → / |
 | /settings | → /settings/profile (ModuleLayout sections) |
-| /settings/* | src/pages/settings.jsx |
+| /settings/* | src/pages/Settings.jsx |
+| /settings/notification-channels | Channels & Quiet Hours — `/api/notification-settings` (`*_enabled` + quiet hours) |
+| /settings/payment-reminders | Multi reminders — `/api/alert-settings` `payment_reminders` |
+| /settings/compliance-reminders | Four cards — `/api/alert-settings` `compliance_reminders` |
+| /settings/stock-alerts | Multi entry list — `/api/alert-settings` `stock_alerts` |
+| /settings/einvoice | 3-state applicability + IRP credentials (`/api/integration-settings` `einvoice`) |
+| /settings/ewb | 3-state applicability + GSP credentials (`ewb`) |
 | /settings/tally-sync | SettingsTallySync — live `GET /api/tally-sync/status`, `POST /api/tally-sync/pair`, `POST /api/tally-sync/unpair` |
 
 ## Create drawer (AppShell)

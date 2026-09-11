@@ -14,6 +14,9 @@ import {
   qrDataUrlFromConfig,
   isThermalTemplateId,
   normalizeThermalWidth,
+  resolveQrMode,
+  sanitizeVoucherConfig,
+  defaultVoucherConfig,
 } from './voucherConfig';
 import { toPrintPayload } from './creamPreviewModel';
 import { sanitizeImageSrc } from './sanitizeImageSrc';
@@ -59,13 +62,20 @@ export async function buildVoucherPdfHtml({
     company?.guid ? api.fetchPrintProfile(company.guid) : Promise.resolve({}),
     company?.guid ? api.fetchCompanyLogo(company.guid) : Promise.resolve({}),
   ]);
+  const profileBase = profileRes.status === 'fulfilled' ? (profileRes.value?.data || {}) : {};
+  // Default Bank from voucher-config wins (Cash clears A/C+IFSC). UPI from Generate-from-UPI.
   const profile = {
-    ...(profileRes.status === 'fulfilled' ? (profileRes.value?.data || {}) : {}),
-    bankName: bank.bankName || profileRes.value?.data?.bankName,
-    bankAccountNo: bank.accountNo || profileRes.value?.data?.bankAccountNo,
-    bankIfsc: bank.ifsc || profileRes.value?.data?.bankIfsc,
+    ...profileBase,
+    ...(bank
+      ? {
+        bankName: bank.bankName || '',
+        bankAccountNo: bank.accountNo || '',
+        bankIfsc: bank.ifsc || '',
+        bankUpi: bank.upiId || '',
+      }
+      : {}),
     declarationText: (cfg.terms || []).filter(Boolean).join('\n')
-      || profileRes.value?.data?.declarationText
+      || profileBase.declarationText
       || '',
   };
   const rawLogo = logoRes.status === 'fulfilled' ? (logoRes.value?.data?.logo_url || '') : '';
@@ -74,12 +84,19 @@ export async function buildVoucherPdfHtml({
     cream, doc, row, full, company, formatDate, profile, logoUrl, format,
   });
   const formatLabel = FORMAT_OPTIONS.find(f => f.id === format)?.label || format;
-  const qrImage = cfg.qrEnabled ? await qrDataUrlFromConfig(cfg) : null;
+  const mode = resolveQrMode(cfg);
+  const qrImage = cfg.qrEnabled
+    ? await qrDataUrlFromConfig({
+      ...cfg,
+      qrMode: mode,
+      qrImage: mode === 'generate' ? null : cfg.qrImage,
+    })
+    : null;
   const safeQr = sanitizeImageSrc(qrImage);
 
   const html = isThermalTemplateId(format)
     ? buildThermalHTML(payload, { paperWidth: thermalPaperWidth, qrImage: safeQr })
-    : buildInvoiceHTML(payload);
+    : buildInvoiceHTML({ ...payload, qrImage: safeQr });
 
   return {
     html,
@@ -97,10 +114,9 @@ export async function persistVoucherConfigs(configs) {
   const stamped = {};
   const now = Date.now();
   Object.keys(configs || {}).forEach(k => {
+    const cleaned = sanitizeVoucherConfig(configs[k], defaultVoucherConfig(k));
     stamped[k] = {
-      ...configs[k],
-      format: resolveDocumentFormat(configs[k]?.format),
-      thermalPaperWidth: normalizeThermalWidth(configs[k]?.thermalPaperWidth),
+      ...cleaned,
       _updatedAt: now,
     };
   });

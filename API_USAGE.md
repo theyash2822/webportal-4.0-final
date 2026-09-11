@@ -34,8 +34,20 @@ Body uses `{ phone: "+91…" }` (E.164). Responses use `access_token`, `requires
 | logoutApi | POST | /api/auth/logout |
 | changePhone | POST | /api/auth/change-phone `{ step, … }` |
 | changeEmail | POST | /api/auth/change-email `{ step, … }` |
-| registerPushToken | POST | /api/push-token (Settings → Notification Channels → Enable browser push) |
+| registerPushToken | POST | /api/push-token (Settings → Channels & Quiet Hours → Enable browser push) |
 | removePushToken | DELETE | /api/push-token |
+
+## Settings alerts / integrations (same as mobile V4)
+Loaded via page-local `useRemoteConfig` in `src/pages/Settings.jsx` (not always wrapped in `api.js` helpers).
+
+| Screen | HTTP | Endpoint | Payload notes |
+|--------|------|----------|---------------|
+| Channels & Quiet Hours | GET/PATCH | `/api/notification-settings` | Mobile keys: `push_enabled`, `email_enabled`, `sms_enabled`, `whatsapp_enabled`, `quiet_enabled`, `quiet_from`, `quiet_to`, `quiet_saturday`, `quiet_sunday` (+ optional `digest`) |
+| Payment / Compliance / Stock alerts | GET/PATCH | `/api/alert-settings` | Partial patches: `payment_reminders`, `compliance_reminders` (gst / einvoice / ewb / other_taxes), `stock_alerts` (selected_entries + channels/schedule) |
+| E-Invoice / EWB credentials | GET/PATCH | `/api/integration-settings` | `einvoice` (provider + password + client_*) and `ewb` (gsp + password + client_*; reads legacy `ewaybill`) |
+| E-Invoice / EWB applicability | POST | `/api/company/:guid/compliance-config` | 3-state: `not_applicable` / `applicable_not_configured` / `applicable_configured` |
+
+Stock group/item pickers use existing `fetchStockGroups` + `fetchStocks` (`/api/stocks/groups`, `/api/stocks/items`).
 
 ## Pairing (same as mobile V4)
 | Function | HTTP | Endpoint |

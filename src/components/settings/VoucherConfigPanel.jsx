@@ -17,7 +17,8 @@ import {
   writeLocalVoucherConfig,
   isThermalTemplateId,
   normalizeThermalWidth,
-  normalizeQrType,
+  resolveQrMode,
+  maskBankAccountNo,
 } from '../../utils/voucherConfig';
 import { persistVoucherConfigs } from '../../utils/voucherPdfBuild';
 import { buildThermalHTML } from '../../utils/thermalPrint';
@@ -25,17 +26,25 @@ import { sanitizeImageSrc } from '../../utils/sanitizeImageSrc';
 
 function GeneratedQrPreview({ cfg }) {
   const [src, setSrc] = useState(null);
+  const mode = resolveQrMode(cfg);
   useEffect(() => {
     let cancelled = false;
     setSrc(null);
-    if (!cfg?.qrEnabled || cfg?.qrImage) return undefined;
-    qrDataUrlFromConfig(cfg).then(url => {
+    if (!cfg?.qrEnabled || mode !== 'generate' || !String(cfg?.qrUpiId || '').trim()) return undefined;
+    qrDataUrlFromConfig({ ...cfg, qrMode: 'generate', qrImage: null, qrEnabled: true }).then(url => {
       if (!cancelled) setSrc(url);
     });
     return () => { cancelled = true; };
-  }, [cfg?.qrEnabled, cfg?.qrType, cfg?.qrUpiId, cfg?.qrUrl, cfg?.qrImage]);
+  }, [cfg?.qrEnabled, cfg?.qrUpiId, cfg?.qrMode, mode]);
   if (!src) return null;
-  return <img src={src} alt="QR preview" className="h-24 w-24 rounded border border-line" />;
+  return (
+    <div className="overflow-hidden rounded-xl border border-line bg-cream/40">
+      <img src={src} alt="QR preview" className="mx-auto my-4 h-40 w-40 object-contain" />
+      <p className="border-t border-line px-3 py-2 text-[12px] text-ink-soft">
+        Generated from UPI · ready for PDF
+      </p>
+    </div>
+  );
 }
 
 function FormatThumb({ type }) {
@@ -202,8 +211,8 @@ export default function VoucherConfigPanel() {
           ? resolveDocumentFormat(val)
           : key === 'thermalPaperWidth'
             ? normalizeThermalWidth(val)
-            : key === 'qrType'
-              ? normalizeQrType(val)
+            : key === 'qrMode'
+              ? (val === 'upload' ? 'upload' : 'generate')
               : val,
       };
       if (key === 'format' || key === 'thermalPaperWidth') nextCfg._updatedAt = Date.now();
@@ -254,9 +263,27 @@ export default function VoucherConfigPanel() {
     const reader = new FileReader();
     reader.onload = () => {
       const safe = sanitizeImageSrc(typeof reader.result === 'string' ? reader.result : null);
-      update(id, 'qrImage', safe);
+      setConfigs(prev => ({
+        ...prev,
+        [id]: { ...prev[id], qrImage: safe, qrMode: 'upload' },
+      }));
+      markDirty();
     };
     reader.readAsDataURL(file);
+  };
+
+  const setQrMode = (id, mode, opts = {}) => {
+    setConfigs(prev => {
+      const cur = prev[id] || {};
+      const nextCfg = {
+        ...cur,
+        qrMode: mode === 'upload' ? 'upload' : 'generate',
+        ...(mode === 'generate' ? { qrImage: null } : {}),
+        ...opts,
+      };
+      return { ...prev, [id]: nextCfg };
+    });
+    markDirty();
   };
 
   const sampleHtmlFor = async (id) => {
@@ -267,9 +294,10 @@ export default function VoucherConfigPanel() {
     const bank = bankInfoFromConfig(cfg, banks);
     const profile = {
       declarationText: (cfg.terms || []).filter(Boolean).join('\n'),
-      bankName: bank.bankName || (cfg.bank !== 'Cash' ? cfg.bank : ''),
-      bankAccountNo: bank.accountNo || '',
-      bankIfsc: bank.ifsc || '',
+      bankName: bank?.bankName || '',
+      bankAccountNo: bank?.accountNo || '',
+      bankIfsc: bank?.ifsc || '',
+      bankUpi: bank?.upiId || '',
     };
     const payload = {
       voucher: {
@@ -301,13 +329,31 @@ export default function VoucherConfigPanel() {
       format: fmt,
     };
     if (isThermalTemplateId(fmt)) {
-      const qrImage = cfg.qrEnabled ? await qrDataUrlFromConfig(cfg) : null;
+      const mode = resolveQrMode(cfg);
+      const qrImage = cfg.qrEnabled
+        ? await qrDataUrlFromConfig({
+          ...cfg,
+          qrMode: mode,
+          qrImage: mode === 'generate' ? null : cfg.qrImage,
+        })
+        : null;
       return buildThermalHTML(payload, {
         paperWidth: normalizeThermalWidth(cfg.thermalPaperWidth),
-        qrImage,
+        qrImage: sanitizeImageSrc(qrImage) || qrImage,
       });
     }
-    return buildInvoiceHTML(payload);
+    const mode = resolveQrMode(cfg);
+    const qrImage = cfg.qrEnabled
+      ? await qrDataUrlFromConfig({
+        ...cfg,
+        qrMode: mode,
+        qrImage: mode === 'generate' ? null : cfg.qrImage,
+      })
+      : null;
+    return buildInvoiceHTML({
+      ...payload,
+      qrImage: sanitizeImageSrc(qrImage) || qrImage,
+    });
   };
 
   const handlePdfPreview = async (id, label) => {
@@ -615,6 +661,33 @@ export default function VoucherConfigPanel() {
                   >
                     {bankOptions.map(b => <option key={b} value={b}>{b}</option>)}
                   </select>
+                  {(() => {
+                    if (!cfg.bank || cfg.bank === 'Cash') {
+                      return (
+                        <p className="mt-1.5 text-[11px] text-ink-faint">
+                          {lt('Cash selected — PDF will not print A/C or IFSC. Pick a bank ledger to print Tally account details.')}
+                        </p>
+                      );
+                    }
+                    const row = banks.find(b => (b.name || b) === cfg.bank);
+                    const ac = row?.account_number || row?.accountNo || '';
+                    const ifsc = row?.ifsc || row?.ifsc_code || '';
+                    if (!ac && !ifsc) {
+                      return (
+                        <p className="mt-1.5 text-[11px] text-ink-faint">
+                          {lt('A/c not in sync yet — sync bank masters from Tally to print account number / IFSC on PDFs.')}
+                        </p>
+                      );
+                    }
+                    return (
+                      <p className="mt-1.5 text-[11px] text-ink-soft" data-testid={`voucher-bank-details-${vt.id}`}>
+                        {ac ? `A/c ${maskBankAccountNo(ac)}` : ''}
+                        {ac && ifsc ? ' · ' : ''}
+                        {ifsc ? `IFSC ${ifsc}` : ''}
+                        <span className="text-ink-faint"> — {lt('printed on PDF')}</span>
+                      </p>
+                    );
+                  })()}
                 </div>
 
                 {/* QR */}
@@ -628,62 +701,104 @@ export default function VoucherConfigPanel() {
                   />
                   {cfg.qrEnabled && (
                     <>
+                      <p className="text-[11px] text-ink-soft">{lt('Choose how the QR is added to the PDF')}</p>
                       <div className="flex flex-wrap gap-2">
                         {[
-                          { v: 'upi', l: 'UPI ID' },
-                          { v: 'url', l: 'Website' },
-                        ].map(opt => (
-                          <button
-                            key={opt.v}
-                            type="button"
-                            className={`rounded-full border px-3 py-1.5 text-[12px] font-semibold ${
-                              normalizeQrType(cfg.qrType) === opt.v
-                                ? 'border-ink bg-ink text-white'
-                                : 'border-line bg-paper text-ink'
-                            }`}
-                            onClick={() => update(vt.id, 'qrType', opt.v)}
-                          >
-                            {lt(opt.l)}
-                          </button>
-                        ))}
+                          { v: 'upload', l: 'Upload QR' },
+                          { v: 'generate', l: 'Generate from UPI' },
+                        ].map(opt => {
+                          const active = resolveQrMode(cfg) === opt.v;
+                          return (
+                            <button
+                              key={opt.v}
+                              type="button"
+                              data-testid={`voucher-qr-mode-${opt.v}-${vt.id}`}
+                              className={`inline-flex items-center gap-1.5 rounded-full border px-3 py-1.5 text-[12px] font-semibold ${
+                                active ? 'border-ink bg-ink text-white' : 'border-line bg-paper text-ink'
+                              }`}
+                              onClick={() => {
+                                if (opt.v === 'generate') {
+                                  setQrMode(vt.id, 'generate');
+                                  return;
+                                }
+                                // Upload: switch mode; open file picker on same tap if no image yet.
+                                setQrMode(vt.id, 'upload');
+                                if (!cfg.qrImage) {
+                                  document.getElementById(`voucher-qr-file-${vt.id}`)?.click();
+                                }
+                              }}
+                            >
+                              {opt.v === 'upload' ? <Upload size={14} /> : null}
+                              {lt(opt.l)}
+                            </button>
+                          );
+                        })}
                       </div>
-                      {normalizeQrType(cfg.qrType) === 'upi' && (
-                        <Input
-                          value={cfg.qrUpiId || ''}
-                          onChange={e => update(vt.id, 'qrUpiId', e.target.value)}
-                          placeholder={lt('Enter UPI ID (e.g. business@upi)')}
-                        />
-                      )}
-                      {normalizeQrType(cfg.qrType) === 'url' && (
-                        <Input
-                          value={cfg.qrUrl || ''}
-                          onChange={e => update(vt.id, 'qrUrl', e.target.value)}
-                          placeholder={lt('Enter website URL (e.g. https://yoursite.com)')}
-                        />
-                      )}
+                      <input
+                        id={`voucher-qr-file-${vt.id}`}
+                        type="file"
+                        accept="image/png,image/jpeg"
+                        className="hidden"
+                        onChange={e => {
+                          onPickQr(vt.id, e.target.files?.[0]);
+                          e.target.value = '';
+                        }}
+                      />
 
-                      {cfg.qrImage ? (
-                        <div className="rounded-xl border border-line bg-cream/40 p-3">
-                          <img src={cfg.qrImage} alt="QR" className="mx-auto h-40 w-40 object-contain" />
-                          <div className="mt-2 flex items-center justify-between gap-2">
-                            <p className="text-[12px] text-ink-soft">{lt('QR code ready for PDF')}</p>
-                            <Button onClick={() => update(vt.id, 'qrImage', null)}>{lt('Remove')}</Button>
-                          </div>
-                          <label className="mt-2 flex cursor-pointer items-center justify-center gap-2 rounded-xl border border-line bg-paper px-3 py-2 text-[12px] font-semibold text-ink">
-                            <Upload size={14} /> {lt('Replace QR')}
-                            <input type="file" accept="image/png,image/jpeg" className="hidden" onChange={e => onPickQr(vt.id, e.target.files?.[0])} />
-                          </label>
-                        </div>
+                      {resolveQrMode(cfg) === 'generate' ? (
+                        <>
+                          <p className="text-[11px] text-ink-soft">
+                            {lt('Enter UPI ID — QR is generated on this device (not sent to any third party).')}
+                          </p>
+                          <Input
+                            value={cfg.qrUpiId || ''}
+                            onChange={e => setQrMode(vt.id, 'generate', { qrUpiId: e.target.value })}
+                            placeholder={lt('e.g. business@upi / shop@oksbi')}
+                            data-testid={`voucher-qr-upi-${vt.id}`}
+                          />
+                          <GeneratedQrPreview cfg={{ ...cfg, qrMode: 'generate', qrImage: null }} />
+                          {!String(cfg.qrUpiId || '').trim() && (
+                            <div className="flex flex-col items-center gap-1 rounded-xl border border-dashed border-line bg-cream/30 px-4 py-6 text-center">
+                              <p className="text-[12px] text-ink-faint">
+                                {lt('QR preview appears here after you enter a UPI ID')}
+                              </p>
+                            </div>
+                          )}
+                        </>
                       ) : (
-                        <label className="flex cursor-pointer flex-col items-center gap-1 rounded-xl border border-dashed border-line bg-cream/30 px-4 py-6 text-center">
-                          <Upload size={22} className="text-ink-faint" />
-                          <span className="text-[13px] font-semibold text-ink">{lt('Upload QR Code Image')}</span>
-                          <span className="text-[11px] text-ink-faint">{lt('PNG or JPG')}</span>
-                          <input type="file" accept="image/png,image/jpeg" className="hidden" onChange={e => onPickQr(vt.id, e.target.files?.[0])} />
-                        </label>
+                        <>
+                          <p className="text-[11px] text-ink-soft">
+                            {lt('Upload a QR image from your device to print on the PDF.')}
+                          </p>
+                          {cfg.qrImage ? (
+                            <div className="overflow-hidden rounded-xl border border-line bg-cream/40">
+                              <img src={cfg.qrImage} alt="QR" className="mx-auto my-4 h-40 w-40 object-contain" />
+                              <div className="flex items-center justify-between gap-2 border-t border-line px-3 py-2">
+                                <p className="text-[12px] text-ink-soft">{lt('Uploaded QR · ready for PDF')}</p>
+                                <Button onClick={() => update(vt.id, 'qrImage', null)}>{lt('Remove')}</Button>
+                              </div>
+                              <button
+                                type="button"
+                                className="flex w-full items-center justify-center gap-2 border-t border-line bg-paper px-3 py-2.5 text-[12px] font-semibold text-ink"
+                                onClick={() => document.getElementById(`voucher-qr-file-${vt.id}`)?.click()}
+                              >
+                                <Upload size={14} /> {lt('Replace QR')}
+                              </button>
+                            </div>
+                          ) : (
+                            <button
+                              type="button"
+                              data-testid={`voucher-qr-upload-zone-${vt.id}`}
+                              className="flex w-full cursor-pointer flex-col items-center gap-1 rounded-xl border border-dashed border-line bg-cream/30 px-4 py-6 text-center"
+                              onClick={() => document.getElementById(`voucher-qr-file-${vt.id}`)?.click()}
+                            >
+                              <Upload size={22} className="text-ink-faint" />
+                              <span className="text-[13px] font-semibold text-ink">{lt('Upload QR Code Image')}</span>
+                              <span className="text-[11px] text-ink-faint">{lt('Tap to select · PNG or JPG')}</span>
+                            </button>
+                          )}
+                        </>
                       )}
-
-                      {!cfg.qrImage && <GeneratedQrPreview cfg={cfg} />}
                     </>
                   )}
                 </div>

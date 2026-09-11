@@ -4,6 +4,34 @@ Format: Date | Task | Files Changed | Behavior Changed | Tested | Risks
 
 ---
 
+## 2026-09-09 | Default Bank → PDF A/C+IFSC+UPI + masked bank lists (mobile parity)
+Files changed: `voucherConfig.js`, `voucherPdfBuild.js`, `invoicePrint.js`, `thermalPrint.js`, `VoucherConfigPanel.jsx`, `Settings.jsx`, `KpiPanel.jsx`
+- PDF bank block uses **Default Bank** Tally ledger A/C + IFSC (Cash clears them); UPI from Generate-from-UPI; QR on Classic/Executive footers.
+- Voucher config shows masked A/c · IFSC under the bank picker.
+- Bank Feeds + Bank Balance KPI show masked account number, IFSC (and branch on Feeds) from live `/api/bank-ledgers` / KPI payloads.
+Tested: `vite build` GREEN.
+
+---
+
+## 2026-09-09 | Voucher QR: Upload vs Generate from UPI (mobile parity)
+Files changed: `src/utils/voucherConfig.js`, `src/components/settings/VoucherConfigPanel.jsx`, `src/utils/voucherPdfBuild.js`
+- Replaced Website/UPI/bank QR chips with mobile **Upload QR** / **Generate from UPI** (`qrMode`).
+- Upload mode uses only the uploaded image; generate mode builds client-side UPI QR and clears upload.
+- Persist/load sanitizes away legacy `qrType` / `qrUrl` / `qrIfsc` / `qrAccount`.
+Tested: `vite build` GREEN.
+
+---
+
+## 2026-09-09 | Settings parity: Stock Alerts, Compliance, Quiet Hours, E-Invoice/EWB
+Files changed: `src/pages/Settings.jsx`, `src/layouts/ModuleLayout.jsx`, `API_USAGE.md`
+- **Stock Alerts** now uses `/api/alert-settings` `stock_alerts` (not inventory settings): group/item multi-select, per-row reorder points, negative stock, expiry, channels, frequency/send time.
+- **Compliance Reminders**: four cards (GST / E-Invoice / EWB / Other Taxes) with steppers + channel chips + GST auto-pause; saves `compliance_reminders` (migrates legacy `compliance.gstr*`).
+- **Notification Channels** → Channels & Quiet Hours: mobile `*_enabled` keys + quiet hours (from/to/weekends).
+- **E-Invoice / EWB**: 3-state applicability; fuller credentials (provider/GSP, password, client id/secret); EWB persists under `ewb` (reads legacy `ewaybill`).
+Tested: `vite build` GREEN.
+
+---
+
 ## 2026-09-09 | Payment Reminders: multi-reminder list (mobile parity, max 4)
 Files changed: `src/pages/Settings.jsx`
 - Settings → Payment Reminders now supports **multiple reminders** like mobile (add up to 4, remove non-first, per-card enable/days/time/on-due-date/channels/exceptions).

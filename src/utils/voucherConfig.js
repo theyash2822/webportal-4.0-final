@@ -66,13 +66,11 @@ export function defaultVoucherConfig(id) {
     format: 'tally_classic_v1',
     bank: 'Cash',
     qrEnabled: false,
+    /** Upload image vs generate QR from UPI ID (mobile parity). */
+    qrMode: 'generate',
     qrImage: null,
     terms: [...(DEFAULT_TERMS[id] || [])],
-    qrType: 'upi',
     qrUpiId: '',
-    qrUrl: '',
-    qrIfsc: '',
-    qrAccount: '',
     thermalPaperWidth: DEFAULT_THERMAL_PAPER_WIDTH,
   };
 }
@@ -81,22 +79,39 @@ export function defaultAllVoucherConfigs() {
   return Object.fromEntries(VOUCHER_TYPES.map(t => [t.id, defaultVoucherConfig(t.id)]));
 }
 
-/** Merge server/local configs onto defaults (mobile applyParsed). */
+/** Infer qrMode for configs saved before this field existed. */
+export function resolveQrMode(cfg) {
+  if (cfg?.qrMode === 'upload' || cfg?.qrMode === 'generate') return cfg.qrMode;
+  if (cfg?.qrImage) return 'upload';
+  // Legacy qrType: uploaded image wins; otherwise treat as generate-from-UPI.
+  if (cfg?.qrType === 'url' || cfg?.qrType === 'bank') return 'generate';
+  return 'generate';
+}
+
+/** Drop removed Website / Bank Details QR fields from saved configs. */
+export function sanitizeVoucherConfig(raw, fallback) {
+  const base = fallback && typeof fallback === 'object' ? fallback : defaultVoucherConfig('sales_inv');
+  const merged = { ...base, ...(raw && typeof raw === 'object' ? raw : {}) };
+  return {
+    format: resolveDocumentFormat(merged.format),
+    thermalPaperWidth: normalizeThermalWidth(merged.thermalPaperWidth ?? base.thermalPaperWidth),
+    bank: typeof merged.bank === 'string' && merged.bank ? merged.bank : 'Cash',
+    qrEnabled: !!merged.qrEnabled,
+    qrMode: resolveQrMode(merged),
+    qrImage: merged.qrImage || null,
+    terms: Array.isArray(merged.terms) ? merged.terms : base.terms,
+    qrUpiId: typeof merged.qrUpiId === 'string' ? merged.qrUpiId : '',
+    ...(merged._updatedAt != null ? { _updatedAt: merged._updatedAt } : {}),
+  };
+}
+
+/** Merge server/local configs onto defaults (mobile applyParsed / sanitizeVConfig). */
 export function mergeVoucherConfigs(parsed) {
   const merged = defaultAllVoucherConfigs();
   if (!parsed || typeof parsed !== 'object') return merged;
   Object.keys(parsed).forEach(k => {
     if (!merged[k]) return;
-    merged[k] = {
-      ...merged[k],
-      ...parsed[k],
-      format: resolveDocumentFormat(parsed[k]?.format),
-      qrType: normalizeQrType(parsed[k]?.qrType ?? merged[k].qrType),
-      terms: Array.isArray(parsed[k]?.terms) ? parsed[k].terms : merged[k].terms,
-      thermalPaperWidth: normalizeThermalWidth(
-        parsed[k]?.thermalPaperWidth ?? merged[k].thermalPaperWidth
-      ),
-    };
+    merged[k] = sanitizeVoucherConfig(parsed[k], merged[k]);
   });
   return merged;
 }
@@ -214,49 +229,87 @@ export function resolveDocumentFormat(format) {
 }
 
 export function bankInfoFromConfig(cfg, bankRows = []) {
-  const name = cfg?.bank || 'Cash';
+  if (!cfg?.bank) return null;
+  const name = cfg.bank || 'Cash';
   const row = bankRows.find(b => (b.name || b) === name);
+  const mode = resolveQrMode(cfg);
+  const upiId =
+    cfg?.qrEnabled && mode === 'generate' && String(cfg.qrUpiId || '').trim()
+      ? String(cfg.qrUpiId).trim()
+      : null;
+
   if (name === 'Cash') {
     return {
       bankName: null,
-      accountNo: cfg?.qrEnabled && cfg?.qrType === 'bank' ? (cfg.qrAccount || null) : null,
-      ifsc: cfg?.qrEnabled && cfg?.qrType === 'bank' ? (cfg.qrIfsc || null) : null,
-      upiId: cfg?.qrEnabled && cfg?.qrType === 'upi' ? (cfg.qrUpiId || null) : null,
+      // A/C + IFSC come from Default Bank ledger only
+      accountNo: null,
+      ifsc: null,
+      upiId,
     };
   }
   return {
     bankName: name,
-    accountNo: (cfg?.qrEnabled && cfg?.qrType === 'bank' ? cfg.qrAccount : null)
-      || row?.account_number || row?.accountNo || null,
-    ifsc: (cfg?.qrEnabled && cfg?.qrType === 'bank' ? cfg.qrIfsc : null)
-      || row?.ifsc || row?.ifsc_code || null,
-    upiId: cfg?.qrEnabled && cfg?.qrType === 'upi' ? (cfg.qrUpiId || null) : null,
+    accountNo: row?.account_number || row?.accountNo || null,
+    ifsc: row?.ifsc || row?.ifsc_code || null,
+    upiId,
   };
 }
 
-/** Normalize QR mode — bank-account QR generation removed (not scannable / unused). */
+/** Mask account number for list/cards — same idea as mobile `maskAccountNo`. */
+export function maskBankAccountNo(raw) {
+  const ac = String(raw || '').trim();
+  if (!ac) return '';
+  if (ac.length < 4) return `•••• ${ac}`;
+  return `•••• ${ac.slice(-4)}`;
+}
+
+/** Credit-card style mask — mobile `formatCardNumber`. */
+export function formatBankCardNumber(raw) {
+  const ac = String(raw || '').trim();
+  if (!ac) return '';
+  const last4 = ac.slice(-4);
+  const masked = ac.slice(0, -4).replace(/./g, '•');
+  const groups = [];
+  for (let i = 0; i < masked.length; i += 4) groups.push(masked.slice(i, i + 4));
+  groups.push(last4);
+  return groups.join(' ');
+}
+
+/** @deprecated Use resolveQrMode — kept for any leftover callers. */
 export function normalizeQrType(qrType) {
-  if (qrType === 'url') return 'url';
-  return 'upi';
+  if (qrType === 'upload') return 'upload';
+  if (qrType === 'generate' || qrType === 'upi' || qrType === 'url' || qrType === 'bank') return 'generate';
+  return 'generate';
 }
 
 function qrPayloadFromConfig(cfg) {
   if (!cfg?.qrEnabled) return null;
-  const qrType = normalizeQrType(cfg.qrType);
-  if (qrType === 'url' && cfg.qrUrl) return String(cfg.qrUrl);
-  if (qrType === 'upi' && cfg.qrUpiId) return `upi://pay?pa=${cfg.qrUpiId}`;
-  return null;
+  // Upload mode never auto-generates
+  if (resolveQrMode(cfg) === 'upload') return null;
+  const upi = String(cfg.qrUpiId || '').trim();
+  if (!upi) return null;
+  return `upi://pay?pa=${upi}`;
+}
+
+/** Public helper for live UI preview. */
+export function getQrPayloadFromConfig(cfg) {
+  return qrPayloadFromConfig(cfg);
 }
 
 /** Client-side QR data URL — never sends UPI/bank data to third parties. */
 export async function qrDataUrlFromConfig(cfg) {
-  const uploaded = sanitizeImageSrc(cfg?.qrImage);
-  if (uploaded) return uploaded;
-  const payload = qrPayloadFromConfig(cfg);
+  if (!cfg?.qrEnabled) return null;
+
+  const mode = resolveQrMode(cfg);
+  if (mode === 'upload') {
+    return sanitizeImageSrc(cfg.qrImage);
+  }
+
+  const payload = qrPayloadFromConfig({ ...cfg, qrMode: 'generate', qrImage: null });
   if (!payload) return null;
   try {
     return await QRCode.toDataURL(payload, {
-      width: 120,
+      width: 160,
       margin: 1,
       errorCorrectionLevel: 'M',
     });
