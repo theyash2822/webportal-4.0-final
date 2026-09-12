@@ -405,6 +405,8 @@ export function SettingsTallySync() {
   const [device, setDevice] = useState(null);
   const [paired, setPaired] = useState(isPaired);
   const [online, setOnline] = useState(!!isDesktopOnline);
+  const [restoreCode, setRestoreCode] = useState('');
+  const [approvals, setApprovals] = useState({ hardSync: [], backups: [], restoreRequests: [] });
   const [state, setState] = useState({ loading: true, saving: false, error: '', message: '' });
   const load = useCallback(async () => {
     setState(s => ({ ...s, loading: true, error: '' }));
@@ -417,6 +419,13 @@ export function SettingsTallySync() {
       setOnline(!!data?.desktop_online);
       if (nextPaired) markPaired();
       else markUnpaired();
+      const appr = await api.fetchWorkspaceApprovals().catch(() => null);
+      const d = appr?.data ?? appr;
+      if (d) setApprovals({
+        hardSync: d.hardSync || [],
+        backups: d.backups || [],
+        restoreRequests: d.restoreRequests || [],
+      });
       setState(s => ({ ...s, loading: false }));
     } catch (err) {
       setState(s => ({ ...s, loading: false, error: err?.message || 'Unable to load pairing status' }));
@@ -490,6 +499,53 @@ export function SettingsTallySync() {
         {state.message && <p className="mt-3 text-[11px] text-pos">{state.message}</p>}
       </Card>
       )}
+      <Card className="p-5 mt-3" data-testid="workspace-approvals">
+        <p className="text-sm font-medium text-ink mb-1">{lt('Hard Sync & Restore approvals')}</p>
+        <p className="text-[12px] text-ink-soft mb-3">{lt('Owner/Admin only. First Hard Sync approval wins. Restore needs the desktop restore code plus a backup.')}</p>
+        {(approvals.hardSync || []).length === 0 ? (
+          <p className="text-[12px] text-ink-faint">{lt('No pending Hard Sync requests.')}</p>
+        ) : approvals.hardSync.map((row) => (
+          <div key={row.id} className="flex items-center justify-between gap-2 py-2 border-t border-line">
+            <span className="text-[12px] text-ink">{row.operation || 'REBUILD'} · {row.device_id?.slice(0, 8)}</span>
+            <div className="flex gap-2">
+              <Button variant="primary" onClick={async () => {
+                try { await api.approveHardSync(row.id); await load(); }
+                catch (e) { setState(s => ({ ...s, error: e.message || lt('Approve failed') })); }
+              }}>{lt('Approve')}</Button>
+              <Button onClick={async () => {
+                try { await api.rejectHardSync(row.id); await load(); }
+                catch (e) { setState(s => ({ ...s, error: e.message || lt('Reject failed') })); }
+              }}>{lt('Reject')}</Button>
+            </div>
+          </div>
+        ))}
+        <div className="mt-4 space-y-2">
+          <p className="text-[12px] font-medium text-ink">{lt('Approve restore (new computer)')}</p>
+          {(approvals.restoreRequests || []).length === 0 && (
+            <p className="text-[11px] text-ink-faint">{lt('Enter the full restore code shown on the new Desktop. Pending codes are not listed for privacy.')}</p>
+          )}
+          <Field label="Restore code from new Desktop">
+            <Input value={restoreCode} onChange={e => setRestoreCode(e.target.value.toUpperCase())} placeholder={lt('e.g. AB3K9Q')} />
+          </Field>
+          {(approvals.backups || []).map((b) => (
+            <div key={b.id} className="flex items-center justify-between gap-2 text-[12px]">
+              <span>{new Date(Number(b.completed_at || b.created_at) * 1000).toLocaleString()} · {b.sha256?.slice(0, 8)}</span>
+              <Button variant="primary" disabled={!restoreCode.trim()} onClick={async () => {
+                try {
+                  await api.approveWorkspaceRestore(restoreCode.trim(), b.id);
+                  setState(s => ({ ...s, message: lt('Restore approved'), error: '' }));
+                  await load();
+                } catch (e) {
+                  setState(s => ({ ...s, error: e.message || lt('Restore approve failed') }));
+                }
+              }}>{lt('Approve this backup')}</Button>
+            </div>
+          ))}
+          {(approvals.backups || []).length === 0 && (
+            <p className="text-[12px] text-ink-faint">{lt('No cloud backups yet. Run Backup Now on the connected Desktop.')}</p>
+          )}
+        </div>
+      </Card>
     </Section>
   );
 }

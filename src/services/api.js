@@ -338,6 +338,11 @@ export const fetchTallySyncStatus = () => apiGet('/api/tally-sync/status');
 export const pairWithTally = (pairingCode) =>
   apiRequest('POST', '/api/tally-sync/pair', { pairing_code: String(pairingCode || '').trim() });
 export const unpairTally = () => apiRequest('POST', '/api/tally-sync/unpair', {});
+export const fetchWorkspaceApprovals = () => apiGet('/api/workspace/approvals');
+export const approveHardSync = (id) => apiRequest('POST', `/api/workspace/hard-sync/${id}/approve`, {});
+export const rejectHardSync = (id) => apiRequest('POST', `/api/workspace/hard-sync/${id}/reject`, {});
+export const approveWorkspaceRestore = (code, backupId) =>
+  apiRequest('POST', '/api/workspace/restore/approve', { code, backupId });
 
 // ─── Ledgers (GET /api/ledgers — same as mobile) ─────────────────────────────
 export const fetchLedgers = async (body = {}) => {
@@ -1276,6 +1281,7 @@ const api = {
   logoutApi, changePhone, changeEmail, registerPushToken, removePushToken,
   // Pairing
   pairWithTally, fetchTallySyncStatus, unpairTally,
+  fetchWorkspaceApprovals, approveHardSync, rejectHardSync, approveWorkspaceRestore,
   // Companies
   fetchCompaniesList, fetchCompanyYears, fetchCompaniesHydrated, resolveActiveCompanyGuid,
   fetchComplianceConfig, saveComplianceConfig, fetchCompanyCapabilities,

@@ -55,6 +55,10 @@ Stock group/item pickers use existing `fetchStockGroups` + `fetchStocks` (`/api/
 | fetchTallySyncStatus | GET | /api/tally-sync/status |
 | pairWithTally | POST | /api/tally-sync/pair `{ pairing_code }` |
 | unpairTally | POST | /api/tally-sync/unpair |
+| fetchWorkspaceApprovals | GET | /api/workspace/approvals |
+| approveHardSync | POST | /api/workspace/hard-sync/:id/approve |
+| rejectHardSync | POST | /api/workspace/hard-sync/:id/reject |
+| approveWorkspaceRestore | POST | /api/workspace/restore/approve `{ code, backupId }` |
 
 ## Companies (same as mobile V4)
 | Function | HTTP | Endpoint |

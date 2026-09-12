@@ -4,6 +4,14 @@ Format: Date | Task | Files Changed | Behavior Changed | Tested | Risks
 
 ---
 
+## 2026-09-12 | Workspace Hard Sync + restore approvals
+Files changed: `Settings.jsx`, `api.js`, `API_USAGE.md`
+- Settings → Tally Sync: pending Hard Sync approve/reject; restore code + latest-3 backup approve.
+Tested: unit N/A; pair + approval cards use existing Section/Card/Button.
+Risks: APIs 404 until backend with workspace routes is running.
+
+---
+
 ## 2026-09-09 | Default Bank → PDF A/C+IFSC+UPI + masked bank lists (mobile parity)
 Files changed: `voucherConfig.js`, `voucherPdfBuild.js`, `invoicePrint.js`, `thermalPrint.js`, `VoucherConfigPanel.jsx`, `Settings.jsx`, `KpiPanel.jsx`
 - PDF bank block uses **Default Bank** Tally ledger A/C + IFSC (Cash clears them); UPI from Generate-from-UPI; QR on Classic/Executive footers.
