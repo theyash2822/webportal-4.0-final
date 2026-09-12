@@ -1,0 +1,350 @@
+/**
+ * Billing & Credits — Web MD §27–29 (Owner-facing).
+ */
+import { useCallback, useEffect, useMemo, useState } from 'react';
+import { Link } from 'react-router-dom';
+import { Card, Button, Input, useLabelT } from '../../components/kit';
+import { useWorkspace } from '../../contexts/WorkspaceContext';
+import api from '../../services/api';
+
+const TABS = [
+  { id: 'overview', label: 'Overview' },
+  { id: 'usage', label: 'Usage' },
+  { id: 'seats', label: 'Workspaces & Seats' },
+  { id: 'transactions', label: 'Transactions' },
+  { id: 'invoices', label: 'Invoices' },
+  { id: 'integrations', label: 'Integrations' },
+];
+
+function unwrap(res) {
+  return res?.data ?? res;
+}
+
+function parseMeta(row) {
+  const raw = row?.meta_json ?? row?.meta;
+  if (!raw) return {};
+  if (typeof raw === 'object') return raw;
+  try { return JSON.parse(raw); } catch { return {}; }
+}
+
+function usageLabel(row) {
+  const meta = parseMeta(row);
+  const ws = row.workspace_id || row.workspaceId || meta.workspaceId || meta.workspace_name || '—';
+  const user = row.user_id || row.userId || meta.userId || meta.user_name
+    || (meta.system ? 'System Automation' : '—');
+  const type = row.kind || row.usage_type || meta.usageType || row.reference || '—';
+  const event = row.reference || meta.event || row.id || '—';
+  return { ws, user, type, event, amount: row.amount, created: row.created_at };
+}
+
+export function SettingsBilling() {
+  const lt = useLabelT();
+  const { currentWorkspace, can, membershipType, reloadWorkspaces, workspaces } = useWorkspace();
+  const [tab, setTab] = useState('overview');
+  const [overview, setOverview] = useState(null);
+  const [rates, setRates] = useState([]);
+  const [seats, setSeats] = useState([]);
+  const [txns, setTxns] = useState([]);
+  const [usage, setUsage] = useState([]);
+  const [invoices, setInvoices] = useState([]);
+  const [orders, setOrders] = useState([]);
+  const [rechargeCredits, setRechargeCredits] = useState('100');
+  const [rechargeAmount, setRechargeAmount] = useState('1000');
+  const [state, setState] = useState({ loading: true, error: '', message: '' });
+  const wsId = currentWorkspace?.id;
+  const isOwner = membershipType === 'OWNER' || can('billing.manage') || can('credits.recharge');
+
+  const load = useCallback(async () => {
+    setState((s) => ({ ...s, loading: true, error: '' }));
+    try {
+      const [ov, rt, st, tx, us, inv, ord] = await Promise.all([
+        api.fetchBillingOverview().catch(() => null),
+        api.fetchBillingRates().catch(() => ({ data: [] })),
+        wsId ? api.fetchWorkspaceSeats(wsId).catch(() => ({ data: [] })) : Promise.resolve({ data: [] }),
+        api.fetchBillingTransactions().catch(() => ({ data: [] })),
+        api.fetchBillingUsage({ limit: 100 }).catch(() => ({ data: [] })),
+        api.fetchBillingInvoices().catch(() => ({ data: [] })),
+        api.fetchBillingPaymentOrders().catch(() => ({ data: [] })),
+      ]);
+      setOverview(unwrap(ov));
+      setRates(unwrap(rt) || []);
+      setSeats(unwrap(st) || []);
+      setTxns(unwrap(tx) || []);
+      const usageRows = unwrap(us);
+      setUsage(Array.isArray(usageRows) ? usageRows : (usageRows?.events || usageRows?.rows || []));
+      const invRows = unwrap(inv);
+      setInvoices(Array.isArray(invRows) ? invRows : (invRows?.invoices || []));
+      const ordRows = unwrap(ord);
+      setOrders(Array.isArray(ordRows) ? ordRows : (ordRows?.orders || []));
+      setState((s) => ({ ...s, loading: false }));
+    } catch (err) {
+      setState((s) => ({ ...s, loading: false, error: err.message }));
+    }
+  }, [wsId]);
+
+  useEffect(() => { load(); }, [load]);
+
+  const pendingOrders = useMemo(
+    () => (orders || []).filter((o) => String(o.status || '').toUpperCase() === 'PENDING'),
+    [orders],
+  );
+
+  const purchaseSeat = async () => {
+    if (!isOwner || !wsId) return;
+    setState((s) => ({ ...s, message: '', error: '' }));
+    try {
+      await api.purchaseWorkspaceSeat(wsId);
+      setState((s) => ({ ...s, message: lt('Seat purchased.') }));
+      await load();
+    } catch (err) {
+      setState((s) => ({ ...s, error: err?.data?.error?.message || err.message }));
+    }
+  };
+
+  const createWs = async () => {
+    if (!isOwner) return;
+    const name = window.prompt(lt('New workspace name'));
+    if (!name?.trim()) return;
+    setState((s) => ({ ...s, message: '', error: '' }));
+    try {
+      await api.createWorkspace({ name: name.trim() });
+      setState((s) => ({ ...s, message: lt('Workspace created.') }));
+      await reloadWorkspaces?.();
+      await load();
+    } catch (err) {
+      setState((s) => ({ ...s, error: err?.data?.error?.message || err.message }));
+    }
+  };
+
+  const createOrder = async () => {
+    if (!isOwner) return;
+    const credits = Number(rechargeCredits);
+    const amountInr = Number(rechargeAmount);
+    if (!Number.isFinite(credits) || credits <= 0) {
+      setState((s) => ({ ...s, error: lt('Enter a valid credits amount.') }));
+      return;
+    }
+    setState((s) => ({ ...s, message: '', error: '' }));
+    try {
+      await api.createBillingPaymentOrder({
+        credits,
+        amountInr,
+        amount_inr: amountInr,
+      });
+      setState((s) => ({ ...s, message: lt('Payment order created (pending).') }));
+      await load();
+      setTab('overview');
+    } catch (err) {
+      setState((s) => ({
+        ...s,
+        error: err?.status === 404
+          ? lt('Payment order API not available yet on this backend.')
+          : (err?.data?.error?.message || err.message),
+      }));
+    }
+  };
+
+  const completeOrder = async (orderId) => {
+    setState((s) => ({ ...s, message: '', error: '' }));
+    try {
+      await api.completeBillingPaymentOrder(orderId);
+      setState((s) => ({ ...s, message: lt('Order completed — credits applied.') }));
+      await load();
+    } catch (err) {
+      setState((s) => ({ ...s, error: err?.data?.error?.message || err.message }));
+    }
+  };
+
+  const balance = overview?.wallet?.balanceCredits ?? overview?.wallet?.balance_credits ?? overview?.balanceCredits;
+
+  return (
+    <div className="space-y-4" data-testid="settings-billing">
+      <div>
+        <h2 className="text-base font-semibold text-ink">{lt('Billing & Credits')}</h2>
+        <p className="mt-0.5 text-[13px] text-ink-soft">{lt('Owner-only wallet, seats, recharge, and usage. Rates from backend.')}</p>
+      </div>
+      {state.error && <p className="text-sm font-medium text-alert">{state.error}</p>}
+      {state.message && <p className="text-sm font-medium text-emerald-700">{state.message}</p>}
+      {state.loading && <p className="text-sm text-ink-soft">{lt('Loading…')}</p>}
+
+      {!isOwner && !state.loading && (
+        <Card className="p-5"><p className="text-sm text-ink-soft">{lt('Only the Workspace Owner can manage billing and recharge.')}</p></Card>
+      )}
+
+      {isOwner && !state.loading && (
+        <>
+          <div className="flex flex-wrap gap-2 border-b border-line pb-2">
+            {TABS.map((t) => (
+              <button
+                key={t.id}
+                type="button"
+                onClick={() => setTab(t.id)}
+                className={`rounded-lg px-3 py-2 text-sm font-semibold ${
+                  tab === t.id ? 'bg-ink text-white' : 'text-ink-soft hover:bg-cream'
+                }`}
+              >
+                {lt(t.label)}
+              </button>
+            ))}
+          </div>
+
+          {tab === 'overview' && (
+            <div className="space-y-4">
+              <Card className="space-y-2 p-5">
+                <p className="text-sm font-semibold text-ink">{lt('Overview')}</p>
+                <p className="text-2xl font-bold text-ink">{balance != null ? `${balance} ${lt('credits')}` : '—'}</p>
+                <p className="text-xs text-ink-soft">{lt('Signup bonus and top-ups appear as credit lots on the backend wallet.')}</p>
+                {(overview?.lots || []).length > 0 && (
+                  <ul className="mt-2 divide-y divide-line">
+                    {overview.lots.map((lot) => (
+                      <li key={lot.id} className="flex justify-between py-1.5 text-xs text-ink-soft">
+                        <span>{lot.source || 'lot'} · {lot.credits_remaining ?? lot.creditsRemaining} left</span>
+                        <span>{lot.expires_at ? new Date(Number(lot.expires_at) * 1000).toLocaleDateString() : ''}</span>
+                      </li>
+                    ))}
+                  </ul>
+                )}
+              </Card>
+
+              <Card className="space-y-3 p-5" data-testid="billing-recharge">
+                <p className="text-sm font-semibold text-ink">{lt('Recharge Credits')}</p>
+                <p className="text-xs text-ink-soft">{lt('Create a payment order, then complete it (dev) when payment gateway is not connected.')}</p>
+                <div className="grid gap-3 sm:grid-cols-2">
+                  <div>
+                    <label className="mb-1 block text-xs font-bold uppercase text-ink-soft">{lt('Credits')}</label>
+                    <Input value={rechargeCredits} onChange={(e) => setRechargeCredits(e.target.value)} />
+                  </div>
+                  <div>
+                    <label className="mb-1 block text-xs font-bold uppercase text-ink-soft">{lt('Amount (INR)')}</label>
+                    <Input value={rechargeAmount} onChange={(e) => setRechargeAmount(e.target.value)} />
+                  </div>
+                </div>
+                <Button variant="primary" onClick={createOrder}>{lt('Create payment order')}</Button>
+                {pendingOrders.length > 0 && (
+                  <ul className="divide-y divide-line">
+                    {pendingOrders.map((o) => (
+                      <li key={o.id} className="flex flex-wrap items-center justify-between gap-2 py-2 text-sm">
+                        <span className="text-ink">{o.credits} {lt('credits')} · ₹{o.amount_inr ?? o.amountInr} · {o.status}</span>
+                        <Button onClick={() => completeOrder(o.id)}>{lt('Complete order (dev)')}</Button>
+                      </li>
+                    ))}
+                  </ul>
+                )}
+              </Card>
+
+              <Card className="p-5">
+                <p className="mb-2 text-sm font-semibold text-ink">{lt('Rates')}</p>
+                <ul className="divide-y divide-line">
+                  {(rates || []).map((r) => (
+                    <li key={r.key} className="flex justify-between py-2 text-sm">
+                      <span className="font-medium text-ink">{r.key}</span>
+                      <span className="text-ink-soft">{r.credits} {lt('credits')}</span>
+                    </li>
+                  ))}
+                  {!rates?.length && <li className="py-2 text-sm text-ink-soft">{lt('No rates loaded.')}</li>}
+                </ul>
+              </Card>
+            </div>
+          )}
+
+          {tab === 'usage' && (
+            <Card className="p-5">
+              <p className="mb-2 text-sm font-semibold text-ink">{lt('Usage')}</p>
+              <p className="mb-3 text-xs text-ink-soft">{lt('Drilldown: Workspace → User → Type → Event')}</p>
+              <ul className="divide-y divide-line">
+                {(usage || []).slice(0, 50).map((row) => {
+                  const u = usageLabel(row);
+                  return (
+                    <li key={row.id || `${u.ws}-${u.event}`} className="py-2 text-sm">
+                      <p className="font-medium text-ink">{u.ws} → {u.user}</p>
+                      <p className="text-xs text-ink-soft">{u.type} · {u.event}{u.amount != null ? ` · ${u.amount}` : ''}</p>
+                      {u.created && (
+                        <p className="text-[11px] text-ink-faint">{new Date(Number(u.created) * 1000).toLocaleString()}</p>
+                      )}
+                    </li>
+                  );
+                })}
+                {!usage?.length && <li className="py-2 text-sm text-ink-soft">{lt('No usage events yet.')}</li>}
+              </ul>
+            </Card>
+          )}
+
+          {tab === 'seats' && (
+            <Card className="space-y-3 p-5">
+              <div className="flex flex-wrap items-center justify-between gap-2">
+                <p className="text-sm font-semibold text-ink">{lt('Workspaces & Seats')}</p>
+                <div className="flex gap-2">
+                  <Button onClick={createWs}>{lt('Create workspace')}</Button>
+                  <Button variant="primary" onClick={purchaseSeat} disabled={!wsId}>{lt('Buy seat')}</Button>
+                </div>
+              </div>
+              <p className="text-xs text-ink-soft">{lt('Current workspace:')} {currentWorkspace?.name || '—'}</p>
+              {(workspaces || []).length > 0 && (
+                <ul className="mb-2 divide-y divide-line text-sm">
+                  {workspaces.map((w) => (
+                    <li key={w.id} className="flex justify-between py-1.5">
+                      <span className="text-ink">{w.name}{w.isBase ? ' · Base' : ''}</span>
+                      <span className="text-ink-soft">{w.membershipStatus || w.membership_status || ''}</span>
+                    </li>
+                  ))}
+                </ul>
+              )}
+              <ul className="divide-y divide-line">
+                {(seats || []).map((s) => (
+                  <li key={s.id} className="flex justify-between py-2 text-sm">
+                    <span className="text-ink">{s.seat_kind} · {s.status}</span>
+                    <span className="text-ink-soft">{s.assigned_user_id ? `User ${s.assigned_user_id}` : lt('Unassigned')}</span>
+                  </li>
+                ))}
+                {!seats?.length && <li className="py-2 text-sm text-ink-soft">{lt('No seats yet.')}</li>}
+              </ul>
+            </Card>
+          )}
+
+          {tab === 'transactions' && (
+            <Card className="p-5">
+              <p className="mb-2 text-sm font-semibold text-ink">{lt('Transactions')}</p>
+              <ul className="divide-y divide-line">
+                {(txns || []).slice(0, 40).map((t) => (
+                  <li key={t.id} className="flex justify-between py-2 text-sm">
+                    <span className="text-ink">{t.kind || t.reference}</span>
+                    <span className="text-ink-soft">{t.amount}</span>
+                  </li>
+                ))}
+                {!txns?.length && <li className="py-2 text-sm text-ink-soft">{lt('No transactions yet.')}</li>}
+              </ul>
+            </Card>
+          )}
+
+          {tab === 'invoices' && (
+            <Card className="p-5">
+              <p className="mb-2 text-sm font-semibold text-ink">{lt('Invoices')}</p>
+              <ul className="divide-y divide-line">
+                {(invoices || []).map((inv) => (
+                  <li key={inv.id} className="flex justify-between py-2 text-sm">
+                    <span className="text-ink">{inv.invoice_number || inv.id} · {inv.status}</span>
+                    <span className="text-ink-soft">{inv.credits} {lt('credits')} · ₹{inv.amount_inr ?? inv.amountInr}</span>
+                  </li>
+                ))}
+                {!invoices?.length && <li className="py-2 text-sm text-ink-soft">{lt('No invoices yet.')}</li>}
+              </ul>
+            </Card>
+          )}
+
+          {tab === 'integrations' && (
+            <Card className="space-y-2 p-5">
+              <p className="text-sm font-semibold text-ink">{lt('Integrations')}</p>
+              <p className="text-sm text-ink-soft">{lt('GST / E-Invoice / E-Way activation charges the Owner wallet. Configure credentials in Settings.')}</p>
+              <div className="flex flex-wrap gap-2">
+                <Link to="/settings/einvoice" className="text-sm font-semibold text-ink underline">{lt('E-Invoice settings')}</Link>
+                <Link to="/settings/ewb" className="text-sm font-semibold text-ink underline">{lt('E-Way Bill settings')}</Link>
+              </div>
+            </Card>
+          )}
+        </>
+      )}
+    </div>
+  );
+}
+
+export default SettingsBilling;

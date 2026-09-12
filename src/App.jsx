@@ -1,6 +1,7 @@
 import { Component } from 'react';
 import { BrowserRouter, Routes, Route, Navigate, useLocation } from 'react-router-dom';
 import { AuthProvider, useAuth } from './contexts/AuthContext';
+import { WorkspaceProvider } from './contexts/WorkspaceContext';
 import { SettingsProvider } from './contexts/SettingsContext';
 import { DrawerStackProvider } from './components/kit';
 import AppShell from './layouts/AppShell';
@@ -18,6 +19,10 @@ import * as F from './pages/financials.jsx';
 import * as C from './pages/compliance.jsx';
 import * as M from './pages/masters.jsx';
 import * as G from './pages/settings.jsx';
+import { SettingsTeamAccess } from './pages/settings/TeamAccess';
+import { SettingsBilling } from './pages/settings/Billing';
+import { SettingsWorkspaceLifecycle } from './pages/settings/WorkspaceLifecycle';
+import { SettingsPaymentModes } from './pages/settings/PaymentModes';
 import Onboarding from './pages/Onboarding';
 import DocumentViewer from './pages/DocumentViewer';
 import CashflowReport from './pages/CashflowReport';
@@ -78,6 +83,7 @@ export default function App() {
     <BrowserRouter>
       <ErrorBoundary>
         <AuthProvider>
+          <WorkspaceProvider>
           <SettingsProvider>
             <DrawerStackProvider>
               <Routes>
@@ -199,6 +205,10 @@ export default function App() {
                     <Route index element={<Navigate to="/settings/profile" replace />} />
                     <Route path="profile" element={<G.SettingsProfile />} />
                     <Route path="company" element={<G.SettingsCompany />} />
+                    <Route path="team" element={<SettingsTeamAccess />} />
+                    <Route path="billing" element={<SettingsBilling />} />
+                    <Route path="payment-modes" element={<SettingsPaymentModes />} />
+                    <Route path="workspace-lifecycle" element={<SettingsWorkspaceLifecycle />} />
                     <Route path="license" element={<G.SettingsLicense />} />
                     <Route path="tally-sync" element={<G.SettingsTallySync />} />
                     <Route path="bank-feeds" element={<G.SettingsBankFeeds />} />
@@ -223,6 +233,7 @@ export default function App() {
               </Routes>
             </DrawerStackProvider>
           </SettingsProvider>
+          </WorkspaceProvider>
         </AuthProvider>
       </ErrorBoundary>
     </BrowserRouter>

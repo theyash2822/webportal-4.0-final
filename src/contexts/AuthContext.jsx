@@ -303,6 +303,7 @@ export function AuthProvider({ children }) {
     }
     localStorage.setItem('selectedCompany', JSON.stringify(full));
     setSelectedCompany(full);
+    wsService.registerCompany(full.guid);
     const fy = pickDefaultFY(full);
     if (fy) {
       localStorage.setItem('selectedFY', JSON.stringify(fy));
@@ -342,7 +343,7 @@ export function AuthProvider({ children }) {
   return (
     <AuthContext.Provider value={{
       token, user, companies, selectedCompany, selectedFY, isPaired, isDesktopOnline, authBootstrapping, syncToast, syncVersion,
-      login, logout, selectCompany, selectFY, loadCompanies, markPaired, markUnpaired, unpairFromTally, refreshPairingStatus, showToast,
+      login, logout, selectCompany, selectFY, loadCompanies, clearCompaniesState, markPaired, markUnpaired, unpairFromTally, refreshPairingStatus, showToast,
     }}>
       {children}
       {syncToast && (

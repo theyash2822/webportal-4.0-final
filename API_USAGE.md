@@ -59,6 +59,37 @@ Stock group/item pickers use existing `fetchStockGroups` + `fetchStocks` (`/api/
 | approveHardSync | POST | /api/workspace/hard-sync/:id/approve |
 | rejectHardSync | POST | /api/workspace/hard-sync/:id/reject |
 | approveWorkspaceRestore | POST | /api/workspace/restore/approve `{ code, backupId }` |
+| fetchMyWorkspaces | GET | /api/me/workspaces (skip Workspace header) |
+| fetchWorkspaceContext | GET | /api/workspaces/:id/context |
+| patchWorkspace | PATCH | /api/workspaces/:id |
+| createWorkspace | POST | /api/workspaces |
+| fetchWorkspaceMembers | GET | /api/workspaces/:id/members |
+| fetchWorkspaceRoles | GET | /api/workspaces/:id/roles |
+| fetchCapabilityRegistry | GET | /api/capabilities/registry |
+| createWorkspaceInvitation | POST | /api/workspaces/:id/invitations |
+| fetchMyInvitations | GET | /api/me/invitations |
+| acceptInvitation / declineInvitation | POST | /api/invitations/:id/accept\|decline |
+| suspend/unsuspend/remove member | POST/DELETE | /api/workspaces/:id/members/:userId/... |
+| fetchWorkspaceAudit | GET | /api/workspaces/:id/audit |
+| fetchBillingOverview / fetchBillingRates | GET | /api/billing/overview , /api/billing/rates |
+| fetchBillingTransactions / fetchBillingUsage | GET | /api/billing/transactions , /api/billing/usage |
+| fetchBillingInvoices | GET | /api/billing/invoices |
+| fetchBillingPaymentOrders / createBillingPaymentOrder | GET/POST | /api/billing/payment-orders |
+| completeBillingPaymentOrder | POST | /api/billing/payment-orders/:id/complete |
+| fetchWorkspaceSeats / purchaseWorkspaceSeat | GET/POST | /api/workspaces/:id/seats |
+| patchWorkspaceMemberRole | PATCH | /api/workspaces/:id/members/:userId/role |
+| initiateWorkspaceTransfer | POST | /api/workspaces/:id/transfer/initiate |
+| fetchWorkspaceTransfer | GET | /api/workspaces/:id/transfer |
+| confirm/complete/revokeWorkspaceTransfer | POST | /api/workspaces/:id/transfer/confirm\|complete\|revoke |
+| request/confirm/completeWorkspaceReset | POST | /api/workspaces/:id/reset/request\|confirm\|complete |
+| request/confirm/completeWorkspaceClose | POST | /api/workspaces/:id/close/request\|confirm\|complete |
+| fetchWorkspaceLifecycle | GET | /api/workspaces/:id/lifecycle |
+| fetchPaymentModeMap / putPaymentModeMap | GET/PUT | /api/workspaces/:id/companies/:guid/payment-mode-map |
+| fetchCostCentres | GET then POST | `/api/workspaces/:wsId/companies/:guid/cost-centres` (prefer), fallback `POST /api/cost-centres { companyGuid }` — Team Access Data Access picker |
+
+Header: `X-Workspace-Id` attached automatically from `td_current_workspace_id` when `workspace_model_enabled` — including `/tally/*` via `tallyRequest`/`tallyGet` and barcode template download.
+
+**403 UX:** `CAPABILITY_DENIED` and `SCOPE_*` responses surface as `"Not allowed. Ask your Workspace administrator."` (token is not cleared).
 
 ## Companies (same as mobile V4)
 | Function | HTTP | Endpoint |

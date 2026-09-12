@@ -67,6 +67,49 @@ class WebSocketService {
       console.info('[WS] voucher:tallySynced', data);
       this._emit('voucher:tallySynced', data);
     });
+
+    this.socket.on('workspace_access_denied', (data) => {
+      console.warn('[WS] workspace_access_denied', data);
+      this._emit('workspace_access_denied', data);
+    });
+
+    this.socket.on('workspace_registered', (data) => {
+      this._emit('workspace_registered', data);
+    });
+
+    // MD §39 — invitations / membership / hard-sync / restore / billing refresh
+    ['invitation', 'membership_changed', 'membership_revoked', 'access_revoked',
+      'hard_sync_request', 'hard_sync_status', 'restore_request', 'restore_status', 'billing_updated'].forEach((evt) => {
+      this.socket.on(evt, (data) => {
+        console.info(`[WS] ${evt}`, data);
+        this._emit(evt, data);
+      });
+    });
+  }
+
+  /**
+   * Join workspace:<id> (+ authorized company rooms).
+   * Server leaves the previous workspace room on register; we also emit leave for clarity.
+   */
+  registerWorkspace(workspaceId) {
+    if (!this.socket?.connected || !workspaceId) return;
+    if (this._workspaceId && this._workspaceId !== workspaceId) {
+      this.socket.emit('workspace:leave', { workspaceId: this._workspaceId });
+    }
+    this._workspaceId = workspaceId;
+    this.socket.emit('workspace:register', { workspaceId });
+  }
+
+  leaveWorkspace(workspaceId) {
+    const id = workspaceId || this._workspaceId;
+    if (!this.socket?.connected || !id) return;
+    this.socket.emit('workspace:leave', { workspaceId: id });
+    if (this._workspaceId === id) this._workspaceId = null;
+  }
+
+  registerCompany(companyGuid) {
+    if (!this.socket?.connected || !companyGuid) return;
+    this.socket.emit('company:register', { companyGuid });
   }
 
   disconnect() {

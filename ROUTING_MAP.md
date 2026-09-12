@@ -75,6 +75,10 @@ Source: `src/App.jsx` (Web Portal 3.0 routes, Vite)
 | /settings/stock-alerts | Multi entry list — `/api/alert-settings` `stock_alerts` |
 | /settings/einvoice | 3-state applicability + IRP credentials (`/api/integration-settings` `einvoice`) |
 | /settings/ewb | 3-state applicability + GSP credentials (`ewb`) |
+| /settings/team | src/pages/settings/TeamAccess.jsx — Members / Roles (editor) / Activity + Data access (module-aware ledger groups) |
+| /settings/billing | src/pages/settings/Billing.jsx — Billing & Credits (Owner): Overview/Usage/Seats/Transactions/Invoices/Integrations + recharge |
+| /settings/payment-modes | src/pages/settings/PaymentModes.jsx — Cash/UPI/Bank/Cheque → ledger map |
+| /settings/workspace-lifecycle | src/pages/settings/WorkspaceLifecycle.jsx — Transfer (member+role) / Reset / Close (triple confirm + grace) |
 | /settings/tally-sync | SettingsTallySync — live `GET /api/tally-sync/status`, `POST /api/tally-sync/pair`, `POST /api/tally-sync/unpair` |
 
 ## Create drawer (AppShell)

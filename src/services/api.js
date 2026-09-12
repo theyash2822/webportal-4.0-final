@@ -3,16 +3,65 @@
 
 import { API_ROOT, BASE_URL, WS_URL } from './config.js';
 import { getAuthToken } from '../utils/authStorage.js';
+import { flag, WS_STORAGE_KEY } from '../config/featureFlags.js';
 
 const TALLY_BASE = API_ROOT;
 
 const getToken = () => getAuthToken();
 
+let _workspaceId = null;
+try {
+  _workspaceId = localStorage.getItem(WS_STORAGE_KEY) || null;
+} catch { /* private mode */ }
+
+export function getWorkspaceId() {
+  return _workspaceId;
+}
+
+export function setWorkspaceId(id) {
+  _workspaceId = id || null;
+  try {
+    if (id) localStorage.setItem(WS_STORAGE_KEY, id);
+    else localStorage.removeItem(WS_STORAGE_KEY);
+  } catch { /* ignore */ }
+}
+
+function attachWorkspaceHeader(headers, { skipWorkspace = false } = {}) {
+  if (skipWorkspace || !flag('workspace_model_enabled')) return headers;
+  const wid = getWorkspaceId();
+  if (wid) headers['X-Workspace-Id'] = wid;
+  return headers;
+}
+
+/** 403 CAPABILITY_DENIED / SCOPE_* → friendly UX; never clears token. */
+function throwHttpError(res, body = {}) {
+  const code = body?.error?.code || body?.code || '';
+  const rawMsg = body?.error?.message || body?.message || '';
+  const codeStr = String(code || '');
+  const msgStr = String(rawMsg || '');
+  const isCapOrScope = res.status === 403 && (
+    codeStr === 'CAPABILITY_DENIED'
+    || codeStr.startsWith('SCOPE_')
+    || msgStr === 'CAPABILITY_DENIED'
+    || msgStr.startsWith('SCOPE_')
+  );
+  // Do not clear authToken / call logout — capability/scope denials are not session expiry.
+  const message = isCapOrScope
+    ? 'Not allowed. Ask your Workspace administrator.'
+    : (rawMsg || `HTTP ${res.status}`);
+  throw Object.assign(new Error(message), {
+    status: res.status,
+    data: body,
+    code: codeStr || undefined,
+  });
+}
+
 // ─── Core request (/app/*) ───────────────────────────────────────────────────
-async function request(method, endpoint, body = null, skipAuth = false, bearer = null) {
+async function request(method, endpoint, body = null, skipAuth = false, bearer = null, opts = {}) {
   const headers = { 'Content-Type': 'application/json' };
   const token = bearer || (!skipAuth ? getToken() : null);
   if (token) headers['Authorization'] = `Bearer ${token}`;
+  attachWorkspaceHeader(headers, opts);
   const res = await fetch(`${BASE_URL}${endpoint}`, {
     method,
     headers,
@@ -20,25 +69,26 @@ async function request(method, endpoint, body = null, skipAuth = false, bearer =
   });
   if (!res.ok) {
     const err = await res.json().catch(() => ({}));
-    throw Object.assign(new Error(err.message || `HTTP ${res.status}`), { status: res.status, data: err });
+    throwHttpError(res, err);
   }
   return res.json();
 }
 
-const get  = (ep, opts)    => request('GET',    ep, null, opts?.skipAuth, opts?.bearer);
-const post = (ep, b, opts) => request('POST',   ep, b,    opts?.skipAuth, opts?.bearer);
-const put  = (ep, b)       => request('PUT',    ep, b);
-const del  = (ep)          => request('DELETE', ep);
+const get  = (ep, opts)    => request('GET',    ep, null, opts?.skipAuth, opts?.bearer, opts);
+const post = (ep, b, opts) => request('POST',   ep, b,    opts?.skipAuth, opts?.bearer, opts);
+const put  = (ep, b, opts) => request('PUT',    ep, b, false, null, opts);
+const del  = (ep, opts)    => request('DELETE', ep, null, false, null, opts);
 
 // ─── Root GET (/api/*, /tally/*) ─────────────────────────────────────────────
-async function apiGet(path) {
+async function apiGet(path, opts = {}) {
   const headers = {};
   const token = getToken();
   if (token) headers['Authorization'] = `Bearer ${token}`;
+  attachWorkspaceHeader(headers, opts);
   const res = await fetch(`${API_ROOT}${path}`, { headers });
   if (!res.ok) {
     const e = await res.json().catch(() => ({}));
-    throw Object.assign(new Error(e.message || e?.error?.message || `HTTP ${res.status}`), { status: res.status, data: e });
+    throwHttpError(res, e);
   }
   return res.json();
 }
@@ -48,14 +98,15 @@ async function apiRequest(method, path, body = null, opts = {}) {
   const headers = { 'Content-Type': 'application/json' };
   const token = bearer || (!skipAuth ? getToken() : null);
   if (token) headers['Authorization'] = `Bearer ${token}`;
+  attachWorkspaceHeader(headers, opts);
   const res = await fetch(`${API_ROOT}${path}`, {
     method,
     headers,
-    body: body ? JSON.stringify(body) : undefined,
+    body: body === undefined || body === null ? undefined : JSON.stringify(body),
   });
   if (!res.ok) {
     const e = await res.json().catch(() => ({}));
-    throw Object.assign(new Error(e.message || e?.error?.message || `HTTP ${res.status}`), { status: res.status, data: e });
+    throwHttpError(res, e);
   }
   return res.json();
 }
@@ -343,6 +394,106 @@ export const approveHardSync = (id) => apiRequest('POST', `/api/workspace/hard-s
 export const rejectHardSync = (id) => apiRequest('POST', `/api/workspace/hard-sync/${id}/reject`, {});
 export const approveWorkspaceRestore = (code, backupId) =>
   apiRequest('POST', '/api/workspace/restore/approve', { code, backupId });
+
+// ─── Workspace / RBAS (Universal Architecture) ───────────────────────────────
+export const fetchMyWorkspaces = () => apiGet('/api/me/workspaces', { skipWorkspace: true });
+export const fetchWorkspaceContext = (workspaceId) =>
+  apiGet(`/api/workspaces/${encodeURIComponent(workspaceId)}/context`);
+export const patchWorkspace = (workspaceId, body) =>
+  apiRequest('PATCH', `/api/workspaces/${encodeURIComponent(workspaceId)}`, body);
+export const createWorkspace = (body) => apiRequest('POST', '/api/workspaces', body);
+export const fetchWorkspaceMembers = (workspaceId) =>
+  apiGet(`/api/workspaces/${encodeURIComponent(workspaceId)}/members`);
+export const fetchWorkspaceRoles = (workspaceId) =>
+  apiGet(`/api/workspaces/${encodeURIComponent(workspaceId)}/roles`);
+export const fetchCapabilityRegistry = () => apiGet('/api/capabilities/registry', { skipWorkspace: true });
+export const fetchWorkspaceRole = (workspaceId, roleId) =>
+  apiGet(`/api/workspaces/${encodeURIComponent(workspaceId)}/roles/${encodeURIComponent(roleId)}`);
+export const patchWorkspaceRole = (workspaceId, roleId, body) =>
+  apiRequest('PATCH', `/api/workspaces/${encodeURIComponent(workspaceId)}/roles/${encodeURIComponent(roleId)}`, body);
+export const createWorkspaceRole = (workspaceId, body) =>
+  apiRequest('POST', `/api/workspaces/${encodeURIComponent(workspaceId)}/roles`, body);
+export const deleteWorkspaceRole = (workspaceId, roleId) =>
+  apiRequest('DELETE', `/api/workspaces/${encodeURIComponent(workspaceId)}/roles/${encodeURIComponent(roleId)}`, {});
+export const fetchMemberScopes = (workspaceId, membershipId) =>
+  apiGet(`/api/workspaces/${encodeURIComponent(workspaceId)}/members/${encodeURIComponent(membershipId)}/scopes`);
+export const putMemberScopes = (workspaceId, membershipId, body) =>
+  apiRequest('PUT', `/api/workspaces/${encodeURIComponent(workspaceId)}/members/${encodeURIComponent(membershipId)}/scopes`, body);
+export const createWorkspaceInvitation = (workspaceId, body) =>
+  apiRequest('POST', `/api/workspaces/${encodeURIComponent(workspaceId)}/invitations`, body);
+export const fetchMyInvitations = () => apiGet('/api/me/invitations', { skipWorkspace: true });
+export const acceptInvitation = (id) => apiRequest('POST', `/api/invitations/${encodeURIComponent(id)}/accept`, {});
+export const declineInvitation = (id) => apiRequest('POST', `/api/invitations/${encodeURIComponent(id)}/decline`, {});
+export const suspendWorkspaceMember = (workspaceId, userId) =>
+  apiRequest('POST', `/api/workspaces/${encodeURIComponent(workspaceId)}/members/${encodeURIComponent(userId)}/suspend`, {});
+export const unsuspendWorkspaceMember = (workspaceId, userId) =>
+  apiRequest('POST', `/api/workspaces/${encodeURIComponent(workspaceId)}/members/${encodeURIComponent(userId)}/unsuspend`, {});
+export const removeWorkspaceMember = (workspaceId, userId) =>
+  apiRequest('DELETE', `/api/workspaces/${encodeURIComponent(workspaceId)}/members/${encodeURIComponent(userId)}`, {});
+export const fetchWorkspaceAudit = (workspaceId) =>
+  apiGet(`/api/workspaces/${encodeURIComponent(workspaceId)}/audit`);
+export const fetchBillingOverview = () => apiGet('/api/billing/overview');
+export const fetchBillingRates = () => apiGet('/api/billing/rates');
+export const fetchBillingTransactions = () => apiGet('/api/billing/transactions');
+export const fetchBillingUsage = (params = {}) => {
+  const q = new URLSearchParams();
+  if (params.workspaceId) q.set('workspaceId', params.workspaceId);
+  if (params.limit) q.set('limit', String(params.limit));
+  const qs = q.toString();
+  return apiGet(`/api/billing/usage${qs ? `?${qs}` : ''}`);
+};
+export const fetchBillingInvoices = () => apiGet('/api/billing/invoices');
+export const fetchBillingPaymentOrders = () => apiGet('/api/billing/payment-orders');
+export const createBillingPaymentOrder = (body) =>
+  apiRequest('POST', '/api/billing/payment-orders', body);
+export const completeBillingPaymentOrder = (orderId) =>
+  apiRequest('POST', `/api/billing/payment-orders/${encodeURIComponent(orderId)}/complete`, {});
+export const fetchWorkspaceSeats = (workspaceId) =>
+  apiGet(`/api/workspaces/${encodeURIComponent(workspaceId)}/seats`);
+export const purchaseWorkspaceSeat = (workspaceId) =>
+  apiRequest('POST', `/api/workspaces/${encodeURIComponent(workspaceId)}/seats`, {});
+export const patchWorkspaceMemberRole = (workspaceId, userId, body) =>
+  apiRequest('PATCH', `/api/workspaces/${encodeURIComponent(workspaceId)}/members/${encodeURIComponent(userId)}/role`, body);
+export const initiateWorkspaceTransfer = (workspaceId, body) =>
+  apiRequest('POST', `/api/workspaces/${encodeURIComponent(workspaceId)}/transfer/initiate`, body);
+export const fetchWorkspaceTransfer = (workspaceId) =>
+  apiGet(`/api/workspaces/${encodeURIComponent(workspaceId)}/transfer`);
+export const confirmWorkspaceTransfer = (workspaceId, transferId, body = {}) =>
+  apiRequest(
+    'POST',
+    `/api/workspaces/${encodeURIComponent(workspaceId)}/transfer/${encodeURIComponent(transferId)}/confirm`,
+    body
+  );
+export const completeWorkspaceTransfer = (workspaceId, transferId, body = {}) =>
+  apiRequest(
+    'POST',
+    `/api/workspaces/${encodeURIComponent(workspaceId)}/transfer/${encodeURIComponent(transferId)}/complete`,
+    body
+  );
+export const revokeWorkspaceTransfer = (workspaceId, transferId, body = {}) =>
+  apiRequest(
+    'POST',
+    `/api/workspaces/${encodeURIComponent(workspaceId)}/transfer/${encodeURIComponent(transferId)}/revoke`,
+    body
+  );
+export const requestWorkspaceReset = (workspaceId, body = {}) =>
+  apiRequest('POST', `/api/workspaces/${encodeURIComponent(workspaceId)}/reset/request`, body);
+export const confirmWorkspaceReset = (workspaceId, body = {}) =>
+  apiRequest('POST', `/api/workspaces/${encodeURIComponent(workspaceId)}/reset/confirm`, body);
+export const completeWorkspaceReset = (workspaceId, body = {}) =>
+  apiRequest('POST', `/api/workspaces/${encodeURIComponent(workspaceId)}/reset/execute`, body);
+export const requestWorkspaceClose = (workspaceId, body = {}) =>
+  apiRequest('POST', `/api/workspaces/${encodeURIComponent(workspaceId)}/close/request`, body);
+export const confirmWorkspaceClose = (workspaceId, body = {}) =>
+  apiRequest('POST', `/api/workspaces/${encodeURIComponent(workspaceId)}/close/confirm`, body);
+export const completeWorkspaceClose = (workspaceId, body = {}) =>
+  apiRequest('POST', `/api/workspaces/${encodeURIComponent(workspaceId)}/close/execute`, body);
+export const fetchWorkspaceLifecycle = (workspaceId) =>
+  apiGet(`/api/workspaces/${encodeURIComponent(workspaceId)}/lifecycle`);
+export const fetchPaymentModeMap = (workspaceId, companyGuid) =>
+  apiGet(`/api/workspaces/${encodeURIComponent(workspaceId)}/companies/${encodeURIComponent(companyGuid)}/payment-mode-map`);
+export const putPaymentModeMap = (workspaceId, companyGuid, body) =>
+  apiRequest('PUT', `/api/workspaces/${encodeURIComponent(workspaceId)}/companies/${encodeURIComponent(companyGuid)}/payment-mode-map`, body);
 
 // ─── Ledgers (GET /api/ledgers — same as mobile) ─────────────────────────────
 export const fetchLedgers = async (body = {}) => {
@@ -744,6 +895,30 @@ export const retryMyEntry = (id) =>
 export const fetchWarehouses = (companyGuid) =>
   apiGet(withCompany('/api/stocks/warehouses', companyGuid));
 
+/**
+ * Cost centres for Data Access picker.
+ * Tries workspace-scoped GET, then POST /api/cost-centres { companyGuid }.
+ */
+export async function fetchCostCentres(companyGuid) {
+  if (!companyGuid) return { data: [] };
+  const wsId = getWorkspaceId();
+  if (wsId) {
+    try {
+      return await apiGet(
+        `/api/workspaces/${encodeURIComponent(wsId)}/companies/${encodeURIComponent(companyGuid)}/cost-centres`
+      );
+    } catch (err) {
+      if (err?.status && err.status !== 404 && err.status !== 405) throw err;
+    }
+  }
+  try {
+    return await apiRequest('POST', '/api/cost-centres', { companyGuid });
+  } catch (err) {
+    if (err?.status === 404 || err?.status === 405) return { data: [] };
+    throw err;
+  }
+}
+
 export const fetchPartiesList = (companyGuid, params = {}) =>
   fetchParties({ companyGuid, ...params });
 
@@ -838,6 +1013,7 @@ export const downloadBarcodeTemplate = async (companyGuid) => {
   const headers = {};
   const token = getToken();
   if (token) headers.Authorization = `Bearer ${token}`;
+  attachWorkspaceHeader(headers);
   const res = await fetch(`${API_ROOT}${withCompany('/api/inventory/barcodes/template', companyGuid)}`, { headers });
   if (!res.ok) throw Object.assign(new Error(`HTTP ${res.status}`), { status: res.status });
   return res.text();
@@ -1227,8 +1403,9 @@ async function tallyRequest(endpoint, body) {
   const headers = { 'Content-Type': 'application/json' };
   const token = getToken();
   if (token) headers['Authorization'] = `Bearer ${token}`;
+  attachWorkspaceHeader(headers);
   const res = await fetch(`${TALLY_BASE}${endpoint}`, { method: 'POST', headers, body: JSON.stringify(body) });
-  if (!res.ok) { const e = await res.json().catch(()=>({})); throw Object.assign(new Error(e.message||`HTTP ${res.status}`), { status: res.status }); }
+  if (!res.ok) { const e = await res.json().catch(()=>({})); throwHttpError(res, e); }
   return res.json();
 }
 
@@ -1236,8 +1413,9 @@ async function tallyGet(endpoint) {
   const headers = {};
   const token = getToken();
   if (token) headers['Authorization'] = `Bearer ${token}`;
+  attachWorkspaceHeader(headers);
   const res = await fetch(`${TALLY_BASE}${endpoint}`, { headers });
-  if (!res.ok) { const e = await res.json().catch(()=>({})); throw Object.assign(new Error(e.message||`HTTP ${res.status}`), { status: res.status }); }
+  if (!res.ok) { const e = await res.json().catch(()=>({})); throwHttpError(res, e); }
   return res.json();
 }
 
@@ -1282,6 +1460,21 @@ const api = {
   // Pairing
   pairWithTally, fetchTallySyncStatus, unpairTally,
   fetchWorkspaceApprovals, approveHardSync, rejectHardSync, approveWorkspaceRestore,
+  fetchMyWorkspaces, fetchWorkspaceContext, patchWorkspace, createWorkspace,
+  fetchWorkspaceMembers, fetchWorkspaceRoles, fetchCapabilityRegistry,
+  fetchWorkspaceRole, patchWorkspaceRole, createWorkspaceRole, deleteWorkspaceRole,
+  fetchMemberScopes, putMemberScopes, createWorkspaceInvitation, fetchMyInvitations,
+  acceptInvitation, declineInvitation, suspendWorkspaceMember, unsuspendWorkspaceMember,
+  fetchWorkspaceAudit, fetchBillingOverview, fetchBillingRates,
+  fetchBillingTransactions, fetchBillingUsage, fetchBillingInvoices,
+  fetchBillingPaymentOrders, createBillingPaymentOrder, completeBillingPaymentOrder,
+  fetchWorkspaceSeats, purchaseWorkspaceSeat, getWorkspaceId, setWorkspaceId,
+  patchWorkspaceMemberRole, initiateWorkspaceTransfer, fetchWorkspaceTransfer,
+  confirmWorkspaceTransfer, completeWorkspaceTransfer, revokeWorkspaceTransfer,
+  requestWorkspaceReset, confirmWorkspaceReset, completeWorkspaceReset,
+  requestWorkspaceClose, confirmWorkspaceClose, completeWorkspaceClose,
+  fetchWorkspaceLifecycle,
+  fetchPaymentModeMap, putPaymentModeMap,
   // Companies
   fetchCompaniesList, fetchCompanyYears, fetchCompaniesHydrated, resolveActiveCompanyGuid,
   fetchComplianceConfig, saveComplianceConfig, fetchCompanyCapabilities,
@@ -1290,7 +1483,7 @@ const api = {
   fetchLedgers, fetchLedgerDetails, fetchLedgerVouchers, fetchVoucherDetail,
   // Stocks
   fetchStockSummary, fetchStockFilters, fetchStocks, fetchStockDetails, fetchParties,
-  fetchWarehouses, fetchPartiesList, fetchBankLedgers,
+  fetchWarehouses, fetchCostCentres, fetchPartiesList, fetchBankLedgers,
   fetchSalesLedgerAccounts, fetchPurchaseLedgerAccounts, fetchStockGodowns,
   fetchTaxLedgers, fetchChargeLedgers, fetchCompanyProfile, fetchStockGroups, fetchStockUnits,
   normalizeChargeLedgers, normalizeStockGodowns,

@@ -7,6 +7,7 @@ import {
   Search, Plus, Check, Wallet, LogOut, User, CornerDownLeft, PanelLeftClose, PanelLeft, Zap, Unplug,
 } from 'lucide-react';
 import { useAuth } from '../contexts/AuthContext';
+import { useWorkspace } from '../contexts/WorkspaceContext';
 import { CreateDrawer, CreateContext } from '../components/create/CreateDrawer';
 import { useNotifications } from '../services/notifications';
 import { useClickOutside, useLabelT } from '../components/kit';
@@ -57,18 +58,32 @@ const NAV = [
 ];
 
 const CREATE_MENU = [
-  { label: 'Sales', items: [['Create Invoice', 'sales-invoice'], ['Sales Order', 'sales-order'], ['Delivery Note', 'delivery-note'], ['Credit Note', 'credit-note'], ['Proforma', 'proforma'], ['Quotation', 'quotation']] },
-  { label: 'Purchase', items: [['Purchase Invoice', 'purchase-invoice'], ['Purchase Order', 'purchase-order'], ['Debit Note', 'debit-note']] },
-  { label: 'Voucher', items: [['Payment', 'payment'], ['Receipt', 'receipt'], ['Journal', 'journal'], ['Contra', 'contra'], ['Expense', 'expense']] },
-  { label: 'Ledger', items: [['Sundry Creditor', 'sundry-creditor'], ['Sundry Debtor', 'sundry-debtor'], ['Duties and Taxes', 'duties-taxes'], ['Custom Group', 'custom-group']] },
+  { label: 'Sales', items: [['Create Invoice', 'sales-invoice', 'sales_invoice.create'], ['Sales Order', 'sales-order', 'sales_order.create'], ['Delivery Note', 'delivery-note', 'delivery_note.create'], ['Credit Note', 'credit-note', 'credit_note.create'], ['Proforma', 'proforma', null], ['Quotation', 'quotation', null]] },
+  { label: 'Purchase', items: [['Purchase Invoice', 'purchase-invoice', 'purchase_invoice.create'], ['Purchase Order', 'purchase-order', 'purchase_order.create'], ['Debit Note', 'debit-note', 'debit_note.create']] },
+  { label: 'Voucher', items: [['Payment', 'payment', 'payment.create'], ['Receipt', 'receipt', 'receipt.create'], ['Journal', 'journal', 'journal.create'], ['Contra', 'contra', 'contra.create'], ['Expense', 'expense', 'expense.create']] },
+  { label: 'Ledger', items: [['Sundry Creditor', 'sundry-creditor', 'ledger_master.create'], ['Sundry Debtor', 'sundry-debtor', 'ledger_master.create'], ['Duties and Taxes', 'duties-taxes', 'ledger_master.create'], ['Custom Group', 'custom-group', 'ledger_master.create']] },
   { label: 'Inventory', items: [
-    ['Add Item', 'stock-item'],
-    ['Add Warehouse', 'warehouse'],
-    ['Stock Transfer', 'stock-transfer'],
-    ['Stock Adjustment', 'stock-adjustment'],
-    ['Stock Edit', 'stock-edit'],
+    ['Add Item', 'stock-item', 'stock_item.create'],
+    ['Add Warehouse', 'warehouse', 'warehouse.create'],
+    ['Stock Transfer', 'stock-transfer', 'stock_transfer.create'],
+    ['Stock Adjustment', 'stock-adjustment', 'stock_adjustment.create'],
+    ['Stock Edit', 'stock-edit', 'stock_item.alter'],
   ] },
 ];
+
+const NAV_CAP = {
+  Dashboard: 'dashboard.view',
+  Sales: 'sales.view',
+  Purchase: 'purchase.view',
+  Vouchers: 'vouchers.view',
+  Inventory: 'inventory.view',
+  Expenses: 'expenses.view',
+  Financials: 'financials.view',
+  Compliance: 'compliance.view',
+  Ledgers: 'ledgers.view',
+  'Audit Trail': 'audit_trail.view',
+  'AI Insights': 'ai_insights.view',
+};
 
 const SEARCH_TARGETS = NAV.flatMap(g => g.items).concat([
   { label: 'Stock Items', to: '/inventory/items' }, { label: 'Warehouses', to: '/inventory/warehouses' },
@@ -243,7 +258,30 @@ export default function AppShell() {
   const location = useLocation();
   const navigate = useNavigate();
   const { user, logout, companies, selectedCompany, selectCompany, selectedFY, selectFY, isPaired, isDesktopOnline, unpairFromTally, showToast } = useAuth();
+  const { workspaces, currentWorkspace, switchWorkspace, can, canCreate, entryMode } = useWorkspace();
   const [unpairing, setUnpairing] = useState(false);
+
+  const filteredNav = useMemo(() => NAV.map((g) => ({
+    ...g,
+    items: (g.items || []).filter((item) => {
+      const cap = NAV_CAP[item.label];
+      return !cap || can(cap);
+    }),
+  })).filter((g) => !g.items || g.items.length > 0), [can]);
+
+  const filteredCreate = useMemo(() => CREATE_MENU.map((g) => ({
+    ...g,
+    items: g.items.filter(([label, kind, cap]) => {
+      if (kind === 'proforma' || kind === 'quotation') {
+        // Entry Mode: Optional → Proforma / Quotation (MD §13)
+        if (entryMode === 'REGULAR') return false;
+        if (kind === 'proforma') return can('sales_invoice.create') || canCreate('sales_invoice.create', { optional: true });
+        if (kind === 'quotation') return can('sales_order.create') || canCreate('sales_order.create', { optional: true });
+      }
+      if ((kind === 'sales-invoice' || kind === 'sales-order') && entryMode === 'OPTIONAL') return false;
+      return !cap || canCreate(cap);
+    }),
+  })).filter((g) => g.items.length > 0), [canCreate, can, entryMode]);
 
   useEffect(() => { setMobileNav(false); }, [location.pathname]);
 
@@ -290,7 +328,7 @@ export default function AppShell() {
         </div>
 
         <nav className="min-h-0 flex-1 overflow-y-auto px-4 pb-4">
-          {NAV.map((group, gi) => (
+          {filteredNav.map((group, gi) => (
             <div key={gi} className="mb-2">
               {group.divider && <div className="mx-2 my-4 border-t border-line" />}
               {group.label && !mini && (
@@ -438,6 +476,45 @@ export default function AppShell() {
           <div className="ml-auto flex items-center gap-3">
             <OfflineBadge />
             <Dropdown
+              testid="workspace-switcher-button"
+              width={280}
+              trigger={<>
+                <span className="flex h-7 w-7 items-center justify-center rounded-md bg-paper-2 text-xs font-bold text-ink">W</span>
+                <span className="hidden max-w-[120px] truncate text-sm font-bold text-ink lg:block">{currentWorkspace?.name || 'Workspace'}</span>
+                <ChevronDown size={14} strokeWidth={2} className="hidden text-ink-faint lg:block" />
+              </>}
+            >
+              <p className="px-5 pt-4 pb-2 text-xs font-bold uppercase tracking-wider text-ink-soft">{lt('Workspace')}</p>
+              {(workspaces || []).map((w) => (
+                <button
+                  key={w.id}
+                  onClick={() => switchWorkspace(w.id)}
+                  data-testid={`workspace-option-${w.id}`}
+                  className="flex w-full items-center gap-3 px-5 py-3 text-left transition-colors hover:bg-cream"
+                >
+                  <span className="flex-1 truncate text-sm font-semibold text-ink">{w.name}</span>
+                  {currentWorkspace?.id === w.id && <Check size={16} strokeWidth={2.5} className="text-ink" />}
+                </button>
+              ))}
+              <button
+                type="button"
+                className="flex w-full items-center gap-2 border-t border-line px-5 py-3 text-left text-sm font-semibold text-ink hover:bg-cream"
+                onClick={async () => {
+                  const name = window.prompt(lt('New workspace name'));
+                  if (!name?.trim()) return;
+                  try {
+                    await api.createWorkspace({ name: name.trim() });
+                    showToast?.(lt('Workspace created'), 'success');
+                    window.location.reload();
+                  } catch (err) {
+                    showToast?.(err?.data?.error?.message || err.message || lt('Could not create workspace'), 'warning');
+                  }
+                }}
+              >
+                <Plus size={14} /> {lt('Create workspace')}
+              </button>
+            </Dropdown>
+            <Dropdown
               testid="company-switcher-button"
               width={270}
               trigger={<>
@@ -501,7 +578,7 @@ export default function AppShell() {
               {showCreate && (
                 <div className="pop absolute right-0 top-full z-[80] mt-2 flex max-w-[calc(100vw-2rem)] flex-col overflow-hidden rounded-xl border border-line bg-surface shadow-lg sm:flex-row" style={{ minWidth: 260 }}>
                   <div className="flex gap-1 overflow-x-auto bg-paper-2 p-2 sm:w-[140px] sm:flex-col sm:overflow-visible">
-                    {CREATE_MENU.map(g => (
+                    {filteredCreate.map(g => (
                       <button
                         key={g.label}
                         onMouseEnter={() => setHoverGroup(g.label)}
@@ -515,7 +592,7 @@ export default function AppShell() {
                     ))}
                   </div>
                   <div className="flex-1 p-2 sm:min-w-[220px]">
-                    {CREATE_MENU.find(g => g.label === hoverGroup)?.items.map(([label, kind]) => (
+                    {(filteredCreate.find(g => g.label === hoverGroup) || filteredCreate[0])?.items.map(([label, kind]) => (
                       <button
                         key={kind}
                         data-testid={`create-${kind}`}
@@ -525,6 +602,9 @@ export default function AppShell() {
                         {lt(label)}
                       </button>
                     ))}
+                    {entryMode && entryMode !== 'BOTH' && (
+                      <p className="px-4 pt-2 text-[11px] font-medium text-ink-faint">Entry mode: {entryMode}</p>
+                    )}
                   </div>
                 </div>
               )}

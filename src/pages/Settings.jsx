@@ -8,7 +8,9 @@ import {
 import { useFmt } from './shared';
 import { useSettings } from '../contexts/SettingsContext';
 import { useAuth } from '../contexts/AuthContext';
+import { useWorkspace } from '../contexts/WorkspaceContext';
 import api, { apiGet, API_ROOT } from '../services/api';
+import wsService from '../services/websocket';
 import { useTranslation } from 'react-i18next';
 import { LANGUAGES } from '../i18n';
 import VoucherConfigPanel from '../components/settings/VoucherConfigPanel';
@@ -401,6 +403,9 @@ export function SettingsCompany() {
 export function SettingsTallySync() {
   const lt = useLabelT();
   const { isPaired, isDesktopOnline, markPaired, markUnpaired, loadCompanies, unpairFromTally } = useAuth();
+  const { can, pairing, membershipType } = useWorkspace();
+  const canPair = membershipType === 'OWNER' || can('tally.pair') || can('workspace.tally.pair');
+  const canUnpair = membershipType === 'OWNER' || can('tally.unpair') || can('workspace.tally.unpair');
   const [code, setCode] = useState('');
   const [device, setDevice] = useState(null);
   const [paired, setPaired] = useState(isPaired);
@@ -408,6 +413,8 @@ export function SettingsTallySync() {
   const [restoreCode, setRestoreCode] = useState('');
   const [approvals, setApprovals] = useState({ hardSync: [], backups: [], restoreRequests: [] });
   const [state, setState] = useState({ loading: true, saving: false, error: '', message: '' });
+  const connectionLabel = pairing?.status
+    || (paired ? (online ? 'CONNECTED' : 'RECONNECTING') : 'UNPAIRED');
   const load = useCallback(async () => {
     setState(s => ({ ...s, loading: true, error: '' }));
     try {
@@ -433,7 +440,14 @@ export function SettingsTallySync() {
   }, [markPaired, markUnpaired]);
   useEffect(() => { load(); }, [load]);
   useEffect(() => { setPaired(isPaired); setOnline(!!isDesktopOnline); }, [isPaired, isDesktopOnline]);
+  useEffect(() => {
+    const un1 = wsService.on('hard_sync_request', () => { load(); });
+    const un2 = wsService.on('hard_sync_status', () => { load(); });
+    const un3 = wsService.on('restore_status', () => { load(); });
+    return () => { un1(); un2(); un3(); };
+  }, [load]);
   const pair = async () => {
+    if (!canPair) return setState(s => ({ ...s, error: lt('Not allowed. Ask your Workspace administrator.'), message: '' }));
     if (!code.trim()) return setState(s => ({ ...s, error: lt('Enter the pairing code shown by the desktop agent.'), message: '' }));
     setState(s => ({ ...s, saving: true, error: '', message: '' }));
     try {
@@ -445,17 +459,26 @@ export function SettingsTallySync() {
       setState(s => ({ ...s, saving: false, message: response?.data?.message || lt('Paired successfully.') }));
       await load();
     } catch (err) {
-      setState(s => ({ ...s, saving: false, error: err?.message || lt('Pairing failed') }));
+      const msg = err?.data?.error?.message || err?.message || lt('Pairing failed');
+      const conflict = /already connected to another/i.test(msg) || err?.data?.error?.code === 'DEVICE_ALREADY_PAIRED';
+      setState(s => ({
+        ...s,
+        saving: false,
+        error: conflict
+          ? lt('This Tally Desktop is already connected to another TallyDekho workspace.')
+          : msg,
+      }));
     }
   };
   const unpair = async () => {
+    if (!canUnpair) return setState(s => ({ ...s, saving: false, error: lt('Not allowed. Ask your Workspace administrator.'), message: '' }));
     setState(s => ({ ...s, saving: true, error: '', message: '' }));
     try {
       await unpairFromTally();
       setPaired(false);
       setOnline(false);
       setDevice(null);
-      setState(s => ({ ...s, saving: false, message: lt('Unpaired. Enter a new code to pair again.') }));
+      setState(s => ({ ...s, saving: false, message: lt('Unpaired. Workspace is in Demo Mode until re-paired and synced.') }));
     } catch (err) {
       setState(s => ({ ...s, saving: false, error: err?.message || lt('Unpair failed') }));
     }
@@ -469,13 +492,25 @@ export function SettingsTallySync() {
       sub="Pair this portal with the Tally desktop agent"
       testid="settings-tally-sync"
       actions={
-        <Button variant="danger" data-testid="unpair-button" disabled={state.saving} onClick={unpair}>
-          {state.saving ? lt('Working…') : lt('Unpair')}
-        </Button>
+        canUnpair ? (
+          <Button variant="danger" data-testid="unpair-button" disabled={state.saving} onClick={unpair}>
+            {state.saving ? lt('Working…') : lt('Unpair')}
+          </Button>
+        ) : null
       }
     >
       {state.loading ? <Card className="p-5"><Skeleton rows={3} /></Card> : (
       <Card className="p-5">
+        <div className="mb-3 flex flex-wrap items-center gap-2">
+          <span className="text-xs font-bold uppercase tracking-wider text-ink-soft">{lt('Tally connection')}</span>
+          <Pill tone={connectionLabel === 'CONNECTED' ? 'pos' : connectionLabel === 'UNPAIRED' ? 'warn' : 'warn'}>
+            {connectionLabel}
+          </Pill>
+          <span className="text-[11px] text-ink-faint">{lt('Connected · Unpaired · Reconnecting · Restore Pending · Hard Sync Pending')}</span>
+        </div>
+        {!canPair && (
+          <p className="mb-3 text-[12px] text-ink-soft">{lt('Only Owner/Admin can pair or unpair Tally for this workspace.')}</p>
+        )}
         <div className="flex items-center gap-3">
           <span className={`h-2 w-2 rounded-[3px] ${paired && online ? 'bg-pos animate-pulse' : paired ? 'bg-warn' : 'bg-warn'}`} />
            <p className="text-[13px] font-medium text-ink">{paired ? <>{lt('Paired with')} {device?.name || lt('Tally Prime — Desktop')}</> : lt('Not paired')}</p>
@@ -484,17 +519,21 @@ export function SettingsTallySync() {
            </Pill>
         </div>
         {lastSeen && paired && <p className="mt-2 text-[11px] text-ink-faint">{lt('Last seen')} {lastSeen}</p>}
+        {canPair && (
         <div className="mt-4 grid grid-cols-1 sm:grid-cols-[1fr_auto] gap-3 items-end">
           <Field label="Pairing code from desktop agent">
             <Input data-testid="pairing-code-input" value={code} onChange={e => setCode(e.target.value)} placeholder={lt('e.g. 482910')} />
           </Field>
            <Button variant="primary" data-testid="pair-button" disabled={state.saving} onClick={pair}>{state.saving ? lt('Pairing…') : lt('Pair device')}</Button>
         </div>
+        )}
+        {canUnpair && (
         <div className="mt-4">
           <Button variant="danger" data-testid="unpair-button-card" disabled={state.saving} onClick={unpair}>
             {state.saving ? lt('Working…') : lt('Unpair Tally')}
           </Button>
         </div>
+        )}
          {state.error && <div className="mt-3 flex items-center gap-3"><p className="text-[11px] text-neg">{state.error}</p><Button onClick={load}>{lt('Retry')}</Button></div>}
         {state.message && <p className="mt-3 text-[11px] text-pos">{state.message}</p>}
       </Card>

@@ -4,6 +4,91 @@ Format: Date | Task | Files Changed | Behavior Changed | Tested | Risks
 
 ---
 
+## 2026-09-12 | Leftover MD: WorkspaceContext company surface, cost-centre picker, 403 UX
+Files changed: `WorkspaceContext.jsx`, `TeamAccess.jsx`, `api.js`, `API_USAGE.md`, `CHANGELOG_AGENT.md`
+- WorkspaceContext re-exposes companies / selectedCompany / selectedFY / isPaired + selectCompany/selectFY/loadCompanies/clearCompaniesState/markPaired/markUnpaired; bootstrap loads companies after context; pairing.status CONNECTED|RECONNECTING → markPaired; UNPAIRED → markUnpaired only on workspace switch.
+- Team Access Data Access: live cost-centre checklist via `fetchCostCentres` (workspace GET then POST `/api/cost-centres` fallback); empty list shows soft message + optional GUID paste.
+- Global 403: CAPABILITY_DENIED / SCOPE_* get friendly "Not allowed. Ask your Workspace administrator." without clearing token.
+Tested: `npm run build`.
+Risks: Cost-centre list routes may 404 until backend ships; GUID fallback still works.
+
+---
+
+## 2026-09-12 | MD full-pass: lifecycle API alignment + phrases
+Files changed: `api.js`, `WorkspaceLifecycle.jsx`, `CHANGELOG_AGENT.md`
+- Transfer confirm/complete/revoke paths include `transferId`; reset/close complete → execute aliases.
+- Reset/Close phrases match backend: `RESET WORKSPACE` / `CLOSE WORKSPACE`.
+Tested: `vite build`.
+Risks: Real 24h grace; email confirm needs SES for production transfer emails.
+
+---
+
+## 2026-09-12 | Forensic: live Hard Sync / restore approval refresh
+Files changed: `Settings.jsx`
+Tally Sync reloads pending Hard Sync / restore when `hard_sync_request`, `hard_sync_status`, or `restore_status` arrives.
+Tested: syntax via page import.
+Risks: Needs backend socket room `workspace:<id>` (already joined on workspace switch).
+
+---
+
+## 2026-09-12 | Remaining MD gaps: billing/lifecycle/ledgers/tally header/sockets
+Files changed: `api.js`, `Billing.jsx`, `TeamAccess.jsx`, `WorkspaceLifecycle.jsx`, `websocket.js`, `WorkspaceContext.jsx`, `API_USAGE.md`, `ROUTING_MAP.md`, `CHANGELOG_AGENT.md`
+- `X-Workspace-Id` on `tallyRequest`/`tallyGet` + barcode template fetch.
+- Billing tabs: Overview (recharge + pending orders + complete-dev), Usage drilldown, Workspaces & Seats, Transactions, Invoices, Integrations links.
+- Team Data Access SELECTED ledgers: Sales / Purchase / Accountant grouping from party `parent`.
+- Lifecycle: member + outgoing role pickers; transfer confirm/complete/revoke; Reset/Close triple-checkbox + phrase; grace/complete buttons.
+- WS: `membership_revoked` + `workspace:leave` on switch; WorkspaceContext handles invitation/access/membership/hard_sync/restore (toast + soft refresh).
+Tested: `vite build`.
+Risks: Transfer/reset/close/payment-order routes soft-fail with 404 until companion backend routes land; usage drilldown depends on backend event shape.
+
+---
+
+## 2026-09-12 | Pending MD items: sockets, payment modes, pair gates, scope pickers
+Files changed: `websocket.js`, `WorkspaceContext.jsx`, `AuthContext.jsx`, `settings.jsx` (Tally Sync), `PaymentModes.jsx`, `TeamAccess.jsx`, `App.jsx`, `ModuleLayout.jsx`; backend `socketHandler.js`
+- WebSocket `workspace:register` / `company:register` on workspace + company switch; leave prior rooms.
+- Settings → **Payment modes** (Cash/UPI/Bank Transfer/Cheque → supporting ledger).
+- Tally Sync: Owner/Admin-only pair/unpair; connection status label; cross-workspace conflict copy.
+- Data Access: live party + warehouse checklists when company selected.
+Tested: `vite build` pending below.
+Risks: Full per-route RBAS + recharge/email transfer wipe still not product-complete; enough for end-to-end admin testing.
+
+---
+
+## 2026-09-12 | MD gap close: Role editor, Data Access, Billing, Lifecycle shells
+Files changed: `TeamAccess.jsx`, `Billing.jsx`, `WorkspaceLifecycle.jsx`, `App.jsx`, `ModuleLayout.jsx`, `AppShell.jsx`, `api.js`, docs
+- Team & Access: **Edit role** (registry permissions + Entry Mode + sensitive), **Change role**, full Data Access dimensions (company/FY/ledger/godown/cost centre ALL|SELECTED|NONE), invite company scope + seat/Tally hints.
+- Settings: **Billing & Credits**, **Workspace lifecycle** (transfer/reset/close shells).
+- AppShell: Create workspace + Entry Mode Create menu (Proforma/Quotation vs Invoice/Order).
+- API clients for member role, transfer/reset/close, billing txns/usage, payment-mode map.
+Tested: `vite build`.
+Risks: Lifecycle/member-role routes depend on backend agent finishing; module-aware ledger pickers still GUID text fields; socket rooms / full billing recharge UI / payment-mode settings page not complete vs §42 exit criteria.
+
+---
+
+## 2026-09-12 | Team & Access — Data access (company permissions)
+Files changed: `settings/TeamAccess.jsx`, `CHANGELOG_AGENT.md`
+- Settings → Team & Access → Members: **Data access** opens company scope editor (All / Selected / None).
+- Invite form includes company access before send (applied on accept via scope snapshot).
+- Hint text: where to grant company visibility for invited members.
+Backend companion (td-backend): `/app/companies` uses workspace Owner for legacy rows + filters by member company scope.
+Tested: lint/build pending.
+Risks: If workspace has no synced companies, Selected list is empty until Tally sync.
+
+---
+
+## 2026-09-12 | Workspace / RBAS web foundation (flags ON)
+Files changed: `featureFlags.js`, `api.js`, `WorkspaceContext.jsx`, `AuthContext.jsx`, `App.jsx`, `AppShell.jsx`, `ModuleLayout.jsx`, `settings/TeamAccess.jsx`, `API_USAGE.md`, `ROUTING_MAP.md`
+- All Workspace/RBAS feature flags ON; every API request attaches `X-Workspace-Id` when set.
+- `WorkspaceProvider` bootstrap: `GET /api/me/workspaces` → context → capabilities/entryMode/scopes.
+- AppShell hierarchy: **Workspace ▼ → Company ▼ → FY ▼**; nav + Create menu gated by capabilities; Entry Mode hint.
+- Settings → **Team & Access** (`/settings/team`): Members / Roles / Activity + invite/suspend/remove.
+- Reuses existing Demo Mode for unpaired (no new unpaired UX).
+- Backend dependency: Personal Workspace bootstrap + Workspace APIs on `td-backend` `cursor`.
+Tested: `vite build` GREEN.
+Risks: Capability-hidden nav can surprise Owners if context fails; soft-fallback `can()===true` only when RBAS flag off. Role capability matrix editor still stub (list only).
+
+---
+
 ## 2026-09-12 | Workspace Hard Sync + restore approvals
 Files changed: `Settings.jsx`, `api.js`, `API_USAGE.md`
 - Settings → Tally Sync: pending Hard Sync approve/reject; restore code + latest-3 backup approve.
