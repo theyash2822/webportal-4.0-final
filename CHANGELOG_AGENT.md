@@ -4,6 +4,15 @@ Format: Date | Task | Files Changed | Behavior Changed | Tested | Risks
 
 ---
 
+## 2026-09-12 | Pairing: show backend already-paired copy
+Files changed: `Settings.jsx`
+Tally Sync shows the backend DEVICE_ALREADY_PAIRED / WORKSPACE_ALREADY_HAS_DESKTOP message (unpair-elsewhere vs unpair-this-workspace) plus a one-desktop-per-workspace hint.
+Tested: syntax of Settings.jsx pair catch.
+Risks: Needs backend copy on `cursor`.
+
+---
+
+
 ## 2026-09-12 | Leftover MD: WorkspaceContext company surface, cost-centre picker, 403 UX
 Files changed: `WorkspaceContext.jsx`, `TeamAccess.jsx`, `api.js`, `API_USAGE.md`, `CHANGELOG_AGENT.md`
 - WorkspaceContext re-exposes companies / selectedCompany / selectedFY / isPaired + selectCompany/selectFY/loadCompanies/clearCompaniesState/markPaired/markUnpaired; bootstrap loads companies after context; pairing.status CONNECTED|RECONNECTING → markPaired; UNPAIRED → markUnpaired only on workspace switch.
@@ -11,6 +20,16 @@ Files changed: `WorkspaceContext.jsx`, `TeamAccess.jsx`, `api.js`, `API_USAGE.md
 - Global 403: CAPABILITY_DENIED / SCOPE_* get friendly "Not allowed. Ask your Workspace administrator." without clearing token.
 Tested: `npm run build`.
 Risks: Cost-centre list routes may 404 until backend ships; GUID fallback still works.
+
+---
+
+## 2026-09-12 | Leftover close: WorkspaceContext company surface + cost centres + 403 UX
+Files changed: `WorkspaceContext.jsx`, `TeamAccess.jsx`, `api.js`, docs
+- WorkspaceContext exposes companies/selectedCompany/selectedFY/isPaired + pairing sync after bootstrap/switch.
+- Cost centres SELECTED: live checklist via `fetchCostCentres` (workspace GET → POST /api/cost-centres) + GUID fallback.
+- 403 CAPABILITY/SCOPE → Ask-admin message; JWT preserved.
+Tested: `vite build`.
+Risks: Cost-centre masters empty until Tally sync populates `cost_centres`.
 
 ---
 

@@ -460,14 +460,7 @@ export function SettingsTallySync() {
       await load();
     } catch (err) {
       const msg = err?.data?.error?.message || err?.message || lt('Pairing failed');
-      const conflict = /already connected to another/i.test(msg) || err?.data?.error?.code === 'DEVICE_ALREADY_PAIRED';
-      setState(s => ({
-        ...s,
-        saving: false,
-        error: conflict
-          ? lt('This Tally Desktop is already connected to another TallyDekho workspace.')
-          : msg,
-      }));
+      setState(s => ({ ...s, saving: false, error: msg }));
     }
   };
   const unpair = async () => {
@@ -526,6 +519,11 @@ export function SettingsTallySync() {
           </Field>
            <Button variant="primary" data-testid="pair-button" disabled={state.saving} onClick={pair}>{state.saving ? lt('Pairing…') : lt('Pair device')}</Button>
         </div>
+        )}
+        {canPair && (
+          <p className="mt-2 text-[11px] text-ink-faint">
+            {lt('One Tally Desktop belongs to only one workspace. If this PC is already paired elsewhere, unpair it there first (Tally Sync → Unpair), then pair it here. If this workspace already has a Desktop, unpair that machine before connecting a new one.')}
+          </p>
         )}
         {canUnpair && (
         <div className="mt-4">
