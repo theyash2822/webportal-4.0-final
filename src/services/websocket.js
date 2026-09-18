@@ -58,6 +58,11 @@ class WebSocketService {
       this._emit('unpaired', data);
     });
 
+    this.socket.on('tally_connection', (data) => {
+      console.info('[WS] tally_connection', data);
+      this._emit('tally_connection', data);
+    });
+
     this.socket.on('logout', (data) => {
       console.warn('[WS] logout', data);
       this._emit('logout', data);
@@ -79,7 +84,8 @@ class WebSocketService {
 
     // MD §39 — invitations / membership / hard-sync / restore / billing refresh
     ['invitation', 'membership_changed', 'membership_revoked', 'access_revoked',
-      'hard_sync_request', 'hard_sync_status', 'restore_request', 'restore_status', 'billing_updated'].forEach((evt) => {
+      'hard_sync_request', 'hard_sync_status', 'restore_request', 'restore_status', 'billing_updated',
+      'workspace_audit', 'invitation_received'].forEach((evt) => {
       this.socket.on(evt, (data) => {
         console.info(`[WS] ${evt}`, data);
         this._emit(evt, data);

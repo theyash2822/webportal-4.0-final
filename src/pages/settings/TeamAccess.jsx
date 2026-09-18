@@ -8,6 +8,8 @@ import { Card, Button, Input, Modal, useLabelT } from '../../components/kit';
 import { useWorkspace } from '../../contexts/WorkspaceContext';
 import { useAuth } from '../../contexts/AuthContext';
 import api from '../../services/api';
+import { partyCategory } from '../../utils/partyCategory.js';
+import wsService from '../../services/websocket';
 
 const TABS = [
   { id: 'members', label: 'Members', icon: Users },
@@ -20,6 +22,40 @@ const MODE_OPTS = [
   { value: 'SELECTED', label: 'Selected only' },
   { value: 'NONE', label: 'None' },
 ];
+
+const AUDIT_LABELS = {
+  'workspace.entered': 'Entered workspace',
+  'workspace.bootstrap': 'Workspace created',
+  'workspace.renamed': 'Workspace renamed',
+  'workspace.created_paid': 'Paid workspace created',
+  'seat.purchased': 'Seat purchased',
+  'invitation.created': 'Invitation sent',
+  'invitation.accepted': 'Invitation accepted',
+  'invitation.declined': 'Invitation declined',
+  'invitation.revoked': 'Invitation revoked',
+  'member.removed': 'Member removed',
+  'member.suspended': 'Member suspended',
+  'member.unsuspended': 'Member unsuspended',
+  'member.role_changed': 'Member role changed',
+  'tally.pair': 'Tally paired',
+  'tally.unpair': 'Tally unpaired',
+  'ownership.transfer_initiated': 'Ownership transfer started',
+  'ownership.transfer_completed': 'Ownership transferred',
+};
+
+function humanizeAudit(row) {
+  const key = row?.event_type || row?.action || row?.event || '';
+  if (AUDIT_LABELS[key]) return AUDIT_LABELS[key];
+  if (!key) return 'Activity';
+  return String(key).replace(/[._]/g, ' ').replace(/\b\w/g, (c) => c.toUpperCase());
+}
+
+function auditActorLabel(row) {
+  if (row?.actor_name) return row.actor_name;
+  if (row?.actor_mobile) return row.actor_mobile;
+  if (row?.actor_user_id) return `User ${row.actor_user_id}`;
+  return '';
+}
 
 function unwrap(res) {
   return res?.data ?? res;
@@ -76,20 +112,6 @@ function GuidChecklist({ options, selected, onToggle, emptyLabel }) {
   );
 }
 
-/** MD §21 — categorize by party parent/group for Sales / Purchase / Accountant. */
-function partyCategory(p) {
-  const parent = String(p.parent || p.group || p.type || '').toLowerCase();
-  if (/sundry\s*debtor|customer|receivable/.test(parent)) return 'sales';
-  if (/sundry\s*creditor|vendor|supplier|payable/.test(parent)) return 'purchase';
-  if (/cash|bank|od\b|overdraft|loan|expense|indirect|direct expense|duties|tax|capital|current asset|current liabilit|deposit|branch|stock/.test(parent)) {
-    return 'accountant';
-  }
-  const tip = String(p.type || p.party_type || '').toLowerCase();
-  if (/customer|debtor/.test(tip)) return 'sales';
-  if (/vendor|supplier|creditor/.test(tip)) return 'purchase';
-  return 'other';
-}
-
 function ModuleAwareLedgerChecklist({ options, selected, onToggle, emptyLabel }) {
   const lt = useLabelT();
   const groups = useMemo(() => {
@@ -142,11 +164,12 @@ function ModuleAwareLedgerChecklist({ options, selected, onToggle, emptyLabel })
 
 export function SettingsTeamAccess() {
   const lt = useLabelT();
-  const { currentWorkspace, can, reloadWorkspaces, pairing } = useWorkspace();
+  const { currentWorkspace, can, reloadWorkspaces, pairing, membershipType } = useWorkspace();
   const { selectedCompany, companies: authCompanies } = useAuth();
   const [partyOptions, setPartyOptions] = useState([]);
   const [godownOptions, setGodownOptions] = useState([]);
   const [costCentreOptions, setCostCentreOptions] = useState([]);
+  const [fyOptions, setFyOptions] = useState([]);
   const [tab, setTab] = useState('members');
   const [members, setMembers] = useState([]);
   const [roles, setRoles] = useState([]);
@@ -156,15 +179,23 @@ export function SettingsTeamAccess() {
   const [registry, setRegistry] = useState({ capabilities: [], sensitivePolicies: [] });
   const [inviteMobile, setInviteMobile] = useState('');
   const [inviteRoleId, setInviteRoleId] = useState('');
-  const [inviteCompanyMode, setInviteCompanyMode] = useState('ALL');
+  const [inviteCompanyMode, setInviteCompanyMode] = useState('NONE');
   const [inviteCompanyGuids, setInviteCompanyGuids] = useState([]);
+  const [inviteFyMode, setInviteFyMode] = useState('NONE');
+  const [inviteFys, setInviteFys] = useState([]);
+  const [inviteLedgerMode, setInviteLedgerMode] = useState('NONE');
+  const [inviteLedgers, setInviteLedgers] = useState([]);
+  const [inviteGodownMode, setInviteGodownMode] = useState('NONE');
+  const [inviteGodowns, setInviteGodowns] = useState([]);
+  const [inviteCcMode, setInviteCcMode] = useState('NONE');
+  const [inviteCostCentres, setInviteCostCentres] = useState([]);
   const [state, setState] = useState({ loading: true, error: '', message: '' });
 
   const [scopeMember, setScopeMember] = useState(null);
   const [scopeLoading, setScopeLoading] = useState(false);
   const [scopeSaving, setScopeSaving] = useState(false);
   const [scopeForm, setScopeForm] = useState({
-    company_mode: 'ALL', fy_mode: 'ALL', ledger_mode: 'ALL', godown_mode: 'ALL', cost_centre_mode: 'ALL',
+    company_mode: 'NONE', fy_mode: 'NONE', ledger_mode: 'NONE', godown_mode: 'NONE', cost_centre_mode: 'NONE',
     companies: [], financialYears: [], ledgers: [], godowns: [], costCentres: [],
   });
 
@@ -172,11 +203,23 @@ export function SettingsTeamAccess() {
   const [roleLoading, setRoleLoading] = useState(false);
   const [roleSaving, setRoleSaving] = useState(false);
   const [roleForm, setRoleForm] = useState({ displayName: '', entryMode: 'BOTH', capabilities: {}, sensitivePolicies: {} });
+  const [createRoleOpen, setCreateRoleOpen] = useState(false);
+  const [createRoleForm, setCreateRoleForm] = useState({ displayName: '', entryMode: 'BOTH' });
+  const [createRoleSaving, setCreateRoleSaving] = useState(false);
 
   const [changeRoleMember, setChangeRoleMember] = useState(null);
   const [changeRoleId, setChangeRoleId] = useState('');
+  const [removingUserId, setRemovingUserId] = useState(null);
 
   const wsId = currentWorkspace?.id;
+  const memberUserId = (m) => m?.user_id ?? m?.userId ?? null;
+  const memberType = (m) => String(m?.membership_type || m?.membershipType || '').toUpperCase();
+  /** Display: Owner, or role label (Admin / Accountant / …) — never raw MEMBER for admin-equivalent. */
+  const memberRoleLabel = (m) => {
+    if (memberType(m) === 'OWNER') return 'Owner';
+    return m.role_display_name || m.roleDisplayName || m.role_system_key || m.roleSystemKey || 'Member';
+  };
+
   const companyOptions = (wsCompanies?.length ? wsCompanies : authCompanies) || [];
   const availableSeats = seats.filter((s) => s.status === 'AVAILABLE' && s.seat_kind === 'PAID');
   const tallyConnected = ['CONNECTED', 'connected'].includes(pairing?.status || currentWorkspace?.tallyConnection || '');
@@ -224,6 +267,89 @@ export function SettingsTeamAccess() {
 
   useEffect(() => { load(); }, [load]);
 
+  useEffect(() => {
+    if (!wsId) return undefined;
+    const refresh = () => {
+      api.fetchWorkspaceAudit(wsId).then((res) => {
+        setAudit(unwrap(res) || []);
+      }).catch(() => {});
+      if (tab === 'members') {
+        api.fetchWorkspaceMembers(wsId).then((res) => {
+          setMembers(unwrap(res) || []);
+        }).catch(() => {});
+      }
+    };
+    const offAudit = wsService.on('workspace_audit', refresh);
+    const offMem = wsService.on('membership_changed', refresh);
+    return () => {
+      offAudit?.();
+      offMem?.();
+    };
+  }, [wsId, tab]);
+
+  const loadInvitePickers = useCallback(async (companyGuid) => {
+    const cg = companyGuid || selectedCompany?.guid || companyOptions[0]?.guid;
+    if (!cg) return;
+    const [parties, wh, ccs, yearsRes] = await Promise.all([
+      api.fetchPartiesList(cg, { limit: 500 }).catch(() => ({ data: [] })),
+      api.fetchWarehouses(cg).catch(() => ({ data: [] })),
+      api.fetchCostCentres(cg).catch(() => ({ data: [] })),
+      api.fetchCompanyYears(cg).catch(() => null),
+    ]);
+    const pList = unwrap(parties);
+    const partyArr = Array.isArray(pList) ? pList : (pList?.parties || pList?.ledgers || []);
+    setPartyOptions(partyArr.map((p) => ({
+      guid: p.guid || p.ledger_guid,
+      name: p.name || p.ledger_name,
+      parent: p.parent || p.group || p.type || '',
+      type: p.type || p.party_type || '',
+    })));
+    const wList = unwrap(wh);
+    const whArr = Array.isArray(wList) ? wList : (wList?.warehouses || wList?.godowns || []);
+    setGodownOptions(whArr.map((g) => ({ guid: g.guid || g.godown_guid || g.name, name: g.name || g.godown_name })));
+    const ccList = unwrap(ccs);
+    const ccArr = Array.isArray(ccList) ? ccList : (ccList?.costCentres || ccList?.cost_centres || []);
+    setCostCentreOptions(ccArr.map((c) => ({
+      guid: c.guid || c.cost_centre_guid || c.id,
+      name: c.name || c.cost_centre_name || c.display_name,
+    })).filter((c) => c.guid));
+
+    const fromAuth = [];
+    const companiesSrc = companyOptions.length ? companyOptions : (authCompanies || []);
+    for (const c of companiesSrc) {
+      for (const y of c.years || []) {
+        const key = y.key || y.uniqueId || y.fy || y.name || `${y.startDate}_${y.endDate}`;
+        if (key) fromAuth.push({ guid: String(key), name: y.name || y.label || String(key) });
+      }
+    }
+    const yData = unwrap(yearsRes);
+    const yArr = Array.isArray(yData) ? yData : (yData?.years || []);
+    const fromApi = yArr.map((y) => {
+      const key = y.key || y.uniqueId || y.fy || y.name || `${y.startDate || y.begin_date}_${y.endDate || y.end_date}`;
+      return { guid: String(key), name: y.name || y.label || String(key) };
+    });
+    const seen = new Set();
+    const merged = [...fromAuth, ...fromApi].filter((y) => {
+      if (seen.has(y.guid)) return false;
+      seen.add(y.guid);
+      return true;
+    });
+    setFyOptions(merged);
+  }, [selectedCompany?.guid, companyOptions, authCompanies]);
+
+  useEffect(() => {
+    const needPickers = [inviteFyMode, inviteLedgerMode, inviteGodownMode, inviteCcMode].some((m) => m === 'SELECTED')
+      || inviteCompanyMode === 'SELECTED';
+    if (!needPickers) return;
+    const cg = inviteCompanyMode === 'SELECTED' && inviteCompanyGuids[0]
+      ? inviteCompanyGuids[0]
+      : (selectedCompany?.guid || companyOptions[0]?.guid);
+    if (cg) loadInvitePickers(cg);
+  }, [
+    inviteCompanyMode, inviteCompanyGuids, inviteFyMode, inviteLedgerMode, inviteGodownMode, inviteCcMode,
+    selectedCompany?.guid, companyOptions, loadInvitePickers,
+  ]);
+
   const toggleList = (id, key) => {
     setScopeForm((f) => {
       const arr = f[key] || [];
@@ -232,7 +358,7 @@ export function SettingsTeamAccess() {
   };
 
   const openDataAccess = async (member) => {
-    if (!can('members.scope_manage') && !can('workspace.scope.manage')) {
+    if (!can('members.scope_manage')) {
       setState((s) => ({ ...s, error: lt('Not allowed. Ask your Workspace administrator.') }));
       return;
     }
@@ -242,11 +368,11 @@ export function SettingsTeamAccess() {
       const scopes = unwrap(await api.fetchMemberScopes(wsId, member.id)) || {};
       const policy = scopes.policy || {};
       setScopeForm({
-        company_mode: policy.company_mode || 'ALL',
-        fy_mode: policy.fy_mode || 'ALL',
-        ledger_mode: policy.ledger_mode || 'ALL',
-        godown_mode: policy.godown_mode || 'ALL',
-        cost_centre_mode: policy.cost_centre_mode || 'ALL',
+        company_mode: policy.company_mode || 'NONE',
+        fy_mode: policy.fy_mode || 'NONE',
+        ledger_mode: policy.ledger_mode || 'NONE',
+        godown_mode: policy.godown_mode || 'NONE',
+        cost_centre_mode: policy.cost_centre_mode || 'NONE',
         companies: scopes.companies || [],
         financialYears: scopes.financialYears || [],
         ledgers: (scopes.ledgers || []).map((L) => (typeof L === 'string' ? L : L.ledger_guid)).filter(Boolean),
@@ -316,7 +442,7 @@ export function SettingsTeamAccess() {
   };
 
   const openRoleEditor = async (role) => {
-    if (!can('roles.edit') && !can('workspace.roles.manage')) {
+    if (!can('roles.edit')) {
       setState((s) => ({ ...s, error: lt('Not allowed. Ask your Workspace administrator.') }));
       return;
     }
@@ -359,8 +485,13 @@ export function SettingsTeamAccess() {
 
   const saveChangeRole = async () => {
     if (!changeRoleMember || !changeRoleId) return;
+    const uid = memberUserId(changeRoleMember);
+    if (!Number.isFinite(Number(uid))) {
+      setState((s) => ({ ...s, error: lt('Missing member user id.') }));
+      return;
+    }
     try {
-      await api.patchWorkspaceMemberRole(wsId, changeRoleMember.user_id, { roleId: changeRoleId });
+      await api.patchWorkspaceMemberRole(wsId, uid, { roleId: changeRoleId });
       setState((s) => ({ ...s, message: lt('Role updated.'), error: '' }));
       setChangeRoleMember(null);
       await load();
@@ -375,11 +506,13 @@ export function SettingsTeamAccess() {
       return;
     }
     if (!tallyConnected) {
-      setState((s) => ({ ...s, error: lt('Workspace must be Tally-connected before inviting members.') }));
+      setState((s) => ({
+        ...s,
+        error: lt('Connect Tally and complete the first sync before inviting new members.'),
+      }));
       return;
     }
     if (!availableSeats.length) {
-      // MD prefers an available paid seat; backend may still accept and leave seat null.
       console.warn('[TeamAccess] No AVAILABLE paid seat — invite may fail or join without seat.');
     }
     setState((s) => ({ ...s, message: '', error: '' }));
@@ -390,17 +523,29 @@ export function SettingsTeamAccess() {
         scopes: {
           policy: {
             company_mode: inviteCompanyMode,
-            fy_mode: 'ALL',
-            ledger_mode: 'ALL',
-            godown_mode: 'ALL',
-            cost_centre_mode: 'ALL',
+            fy_mode: inviteFyMode,
+            ledger_mode: inviteLedgerMode,
+            godown_mode: inviteGodownMode,
+            cost_centre_mode: inviteCcMode,
           },
           companies: inviteCompanyMode === 'SELECTED' ? inviteCompanyGuids : [],
+          financialYears: inviteFyMode === 'SELECTED' ? inviteFys : [],
+          ledgers: inviteLedgerMode === 'SELECTED' ? inviteLedgers.map((g) => ({ ledger_guid: g })) : [],
+          godowns: inviteGodownMode === 'SELECTED' ? inviteGodowns.map((g) => ({ godown_guid: g })) : [],
+          costCentres: inviteCcMode === 'SELECTED' ? inviteCostCentres.map((g) => ({ cost_centre_guid: g })) : [],
         },
       });
       setInviteMobile('');
       setInviteCompanyMode('ALL');
       setInviteCompanyGuids([]);
+      setInviteFyMode('ALL');
+      setInviteFys([]);
+      setInviteLedgerMode('ALL');
+      setInviteLedgers([]);
+      setInviteGodownMode('ALL');
+      setInviteGodowns([]);
+      setInviteCcMode('ALL');
+      setInviteCostCentres([]);
       setState((s) => ({ ...s, message: lt('Invitation sent.') }));
       await load();
       await reloadWorkspaces?.();
@@ -409,26 +554,110 @@ export function SettingsTeamAccess() {
     }
   };
 
-  const suspend = async (userId) => {
-    if (!can('members.remove')) return;
-    await api.suspendWorkspaceMember(wsId, userId);
-    await load();
-  };
-  const unsuspend = async (userId) => {
-    if (!can('members.remove')) return;
-    await api.unsuspendWorkspaceMember(wsId, userId);
-    await load();
-  };
-  const remove = async (userId) => {
-    if (!can('members.remove')) return;
-    if (!window.confirm(lt('Remove this member from the workspace?'))) return;
-    await api.removeWorkspaceMember(wsId, userId);
-    await load();
+  const canEditScopes = can('members.scope_manage');
+  const canEditRoles = can('roles.edit');
+  const canAssignRole = can('members.role_assign') || canEditRoles;
+
+  const createRole = async () => {
+    if (!canEditRoles || !wsId) return;
+    if (!createRoleForm.displayName.trim()) {
+      setState((s) => ({ ...s, error: lt('Enter a display name for the role.') }));
+      return;
+    }
+    setCreateRoleSaving(true);
+    setState((s) => ({ ...s, error: '', message: '' }));
+    try {
+      const res = await api.createWorkspaceRole(wsId, {
+        displayName: createRoleForm.displayName.trim(),
+        entryMode: createRoleForm.entryMode,
+      });
+      const created = unwrap(res) || {};
+      const role = created.role || created;
+      setCreateRoleOpen(false);
+      setCreateRoleForm({ displayName: '', entryMode: 'BOTH' });
+      setState((s) => ({ ...s, message: lt('Role created.') }));
+      await load();
+      if (role?.id) await openRoleEditor(role);
+    } catch (err) {
+      setState((s) => ({ ...s, error: err?.data?.error?.message || err.message }));
+    } finally {
+      setCreateRoleSaving(false);
+    }
   };
 
-  const canEditScopes = can('members.scope_manage') || can('workspace.scope.manage');
-  const canEditRoles = can('roles.edit') || can('workspace.roles.manage');
-  const canAssignRole = can('members.role_assign') || canEditRoles;
+  const deleteRole = async (role) => {
+    if (!canEditRoles || !wsId || !role?.id) return;
+    if (role.system_key || role.is_builtin) return;
+    if (!window.confirm(lt('Delete this custom role?'))) return;
+    try {
+      await api.deleteWorkspaceRole(wsId, role.id);
+      setState((s) => ({ ...s, message: lt('Role deleted.'), error: '' }));
+      await load();
+    } catch (err) {
+      setState((s) => ({ ...s, error: err?.data?.error?.message || err.message }));
+    }
+  };
+
+  const suspend = async (userId) => {
+    if (!(can('members.suspend') || can('members.remove') || membershipType === 'OWNER')) {
+      setState((s) => ({ ...s, error: lt('Not allowed. Ask your Workspace administrator.') }));
+      return;
+    }
+    try {
+      await api.suspendWorkspaceMember(wsId, userId);
+      setState((s) => ({ ...s, message: lt('Member suspended.'), error: '' }));
+      await load();
+    } catch (err) {
+      setState((s) => ({ ...s, error: err?.data?.error?.message || err.message || lt('Suspend failed') }));
+    }
+  };
+  const unsuspend = async (userId) => {
+    if (!(can('members.unsuspend') || can('members.suspend') || can('members.remove') || membershipType === 'OWNER')) {
+      setState((s) => ({ ...s, error: lt('Not allowed. Ask your Workspace administrator.') }));
+      return;
+    }
+    try {
+      await api.unsuspendWorkspaceMember(wsId, userId);
+      setState((s) => ({ ...s, message: lt('Member unsuspended.'), error: '' }));
+      await load();
+    } catch (err) {
+      setState((s) => ({ ...s, error: err?.data?.error?.message || err.message || lt('Unsuspend failed') }));
+    }
+  };
+  const remove = async (userId) => {
+    if (!(can('members.remove') || membershipType === 'OWNER')) {
+      setState((s) => ({ ...s, error: lt('Not allowed. Ask your Workspace administrator.') }));
+      return;
+    }
+    const uid = userId != null && userId !== '' ? Number(userId) : NaN;
+    if (!Number.isFinite(uid)) {
+      setState((s) => ({ ...s, error: lt('Missing member user id.') }));
+      return;
+    }
+    if (!window.confirm(lt('Remove this member from the workspace?'))) return;
+    setRemovingUserId(uid);
+    setState((s) => ({ ...s, error: '', message: '' }));
+    try {
+      await api.removeWorkspaceMember(wsId, uid);
+      setState((s) => ({ ...s, message: lt('Member removed.'), error: '' }));
+      await load();
+    } catch (err) {
+      const msg = err?.data?.error?.message || err.message || lt('Remove failed');
+      const network = /failed to fetch|networkerror|load failed/i.test(String(err?.message || ''));
+      setState((s) => ({
+        ...s,
+        error: network
+          ? lt('Remove failed — cannot reach API. Check that the backend is running on :3001.')
+          : msg,
+      }));
+    } finally {
+      setRemovingUserId(null);
+    }
+  };
+
+  const canRemoveMember = can('members.remove') || membershipType === 'OWNER';
+  const canSuspendMember = can('members.suspend') || can('members.remove') || membershipType === 'OWNER';
+  const canUnsuspendMember = can('members.unsuspend') || can('members.suspend') || can('members.remove') || membershipType === 'OWNER';
 
   if (!wsId) {
     return (
@@ -472,6 +701,12 @@ export function SettingsTeamAccess() {
                 {' · '}
                 {lt('Available seats:')} {availableSeats.length}
               </p>
+              {!tallyConnected && (
+                <p className="text-xs font-medium text-warn" data-testid="invite-tally-required">
+                  {lt('Connect Tally and complete the first sync before inviting new members.')}
+                </p>
+              )}
+              <fieldset disabled={!tallyConnected} className={!tallyConnected ? 'opacity-60' : undefined}>
               <div className="flex flex-col gap-3 sm:flex-row sm:items-end">
                 <div className="flex-1">
                   <label className="mb-1 block text-xs font-bold uppercase text-ink-soft">{lt('Mobile')}</label>
@@ -486,7 +721,20 @@ export function SettingsTeamAccess() {
               </div>
               <div>
                 <label className="mb-1 block text-xs font-bold uppercase text-ink-soft">{lt('Company access')}</label>
-                <ModeSelect value={inviteCompanyMode} onChange={setInviteCompanyMode} />
+                <select
+                  className="h-11 w-full rounded-lg border border-line bg-surface px-3 text-sm"
+                  value={inviteCompanyMode}
+                  onChange={(e) => setInviteCompanyMode(e.target.value)}
+                  data-testid="invite-company-mode"
+                >
+                  <option value="NONE">{lt('No company access yet')}</option>
+                  <option value="SELECTED">{lt('Selected companies')}</option>
+                </select>
+                {inviteCompanyMode === 'NONE' && (
+                  <p className="mt-1 text-xs text-ink-soft" data-testid="invite-company-none-warn">
+                    {lt('This member will join the workspace but will not be able to view company data until company access is assigned.')}
+                  </p>
+                )}
                 {inviteCompanyMode === 'SELECTED' && (
                   <div className="mt-2">
                     <GuidChecklist
@@ -498,42 +746,112 @@ export function SettingsTeamAccess() {
                   </div>
                 )}
               </div>
-              <Button onClick={invite}>{lt('Send invite')}</Button>
+              <div>
+                <label className="mb-1 block text-xs font-bold uppercase text-ink-soft">{lt('Financial years')}</label>
+                <ModeSelect value={inviteFyMode} onChange={setInviteFyMode} testid="invite-fy-mode" />
+                {inviteFyMode === 'SELECTED' && (
+                  <div className="mt-2">
+                    <GuidChecklist
+                      options={fyOptions}
+                      selected={inviteFys}
+                      onToggle={(id) => setInviteFys((g) => (g.includes(id) ? g.filter((x) => x !== id) : [...g, id]))}
+                      emptyLabel="No financial years found for the selected company."
+                    />
+                  </div>
+                )}
+              </div>
+              <div>
+                <label className="mb-1 block text-xs font-bold uppercase text-ink-soft">{lt('Ledgers / Parties')}</label>
+                <ModeSelect value={inviteLedgerMode} onChange={setInviteLedgerMode} testid="invite-ledger-mode" />
+                {inviteLedgerMode === 'SELECTED' && (
+                  <div className="mt-2">
+                    <ModuleAwareLedgerChecklist
+                      options={partyOptions}
+                      selected={inviteLedgers}
+                      onToggle={(id) => setInviteLedgers((g) => (g.includes(id) ? g.filter((x) => x !== id) : [...g, id]))}
+                      emptyLabel="No parties loaded — select a company first."
+                    />
+                  </div>
+                )}
+              </div>
+              <div>
+                <label className="mb-1 block text-xs font-bold uppercase text-ink-soft">{lt('Godowns / Warehouses')}</label>
+                <ModeSelect value={inviteGodownMode} onChange={setInviteGodownMode} testid="invite-godown-mode" />
+                {inviteGodownMode === 'SELECTED' && (
+                  <div className="mt-2">
+                    <GuidChecklist
+                      options={godownOptions}
+                      selected={inviteGodowns}
+                      onToggle={(id) => setInviteGodowns((g) => (g.includes(id) ? g.filter((x) => x !== id) : [...g, id]))}
+                      emptyLabel="No warehouses loaded."
+                    />
+                  </div>
+                )}
+              </div>
+              <div>
+                <label className="mb-1 block text-xs font-bold uppercase text-ink-soft">{lt('Cost centres')}</label>
+                <ModeSelect value={inviteCcMode} onChange={setInviteCcMode} testid="invite-cc-mode" />
+                {inviteCcMode === 'SELECTED' && (
+                  <div className="mt-2">
+                    <GuidChecklist
+                      options={costCentreOptions}
+                      selected={inviteCostCentres}
+                      onToggle={(id) => setInviteCostCentres((g) => (g.includes(id) ? g.filter((x) => x !== id) : [...g, id]))}
+                      emptyLabel="No cost centres synced yet."
+                    />
+                  </div>
+                )}
+              </div>
+              <Button onClick={invite} disabled={!tallyConnected}>{lt('Send invite')}</Button>
+              </fieldset>
             </Card>
           )}
 
           <Card className="p-5">
             <p className="mb-2 text-sm font-semibold text-ink">{lt('Members')}</p>
             <ul className="divide-y divide-line">
-              {(members || []).map((m) => (
-                <li key={m.id || m.user_id} className="flex flex-wrap items-center gap-3 py-3">
+              {(members || []).map((m) => {
+                const uid = memberUserId(m);
+                const isOwnerRow = memberType(m) === 'OWNER';
+                return (
+                <li key={m.id || uid} className="flex flex-wrap items-center gap-3 py-3">
                   <div className="min-w-0 flex-1">
-                    <p className="text-sm font-semibold text-ink">{m.user_name || m.name || m.user_mobile || m.mobile || `User ${m.user_id}`}</p>
+                    <p className="text-sm font-semibold text-ink">{m.user_name || m.name || m.user_mobile || m.mobile || `User ${uid}`}</p>
                     <p className="text-xs text-ink-soft">
-                      {m.membership_type || m.membershipType}
-                      {m.role_display_name ? ` · ${m.role_display_name}` : ''}
+                      {memberRoleLabel(m)}
                       {m.status ? ` · ${m.status}` : ''}
                       {m.seat_id ? ` · Seat assigned` : ''}
                     </p>
                   </div>
                   <div className="flex flex-wrap gap-2">
-                    {m.membership_type !== 'OWNER' && canAssignRole && (
-                      <Button onClick={() => { setChangeRoleMember(m); setChangeRoleId(m.role_id || roles[0]?.id || ''); }}>{lt('Change role')}</Button>
+                    {!isOwnerRow && canAssignRole && (
+                      <Button type="button" onClick={() => { setChangeRoleMember(m); setChangeRoleId(m.role_id || roles[0]?.id || ''); }}>{lt('Change role')}</Button>
                     )}
-                    {m.membership_type !== 'OWNER' && canEditScopes && (
-                      <Button onClick={() => openDataAccess(m)} data-testid={`member-data-access-${m.user_id}`}>{lt('Data access')}</Button>
+                    {!isOwnerRow && canEditScopes && (
+                      <Button type="button" onClick={() => openDataAccess(m)} data-testid={`member-data-access-${uid}`}>{lt('Data access')}</Button>
                     )}
-                    {m.membership_type !== 'OWNER' && can('members.remove') && (
+                    {!isOwnerRow && (canSuspendMember || canRemoveMember) && (
                       <>
-                        {m.status === 'SUSPENDED'
-                          ? <Button onClick={() => unsuspend(m.user_id)}>{lt('Unsuspend')}</Button>
-                          : <Button onClick={() => suspend(m.user_id)}>{lt('Suspend')}</Button>}
-                        <Button onClick={() => remove(m.user_id)}>{lt('Remove')}</Button>
+                        {canSuspendMember && (m.status === 'SUSPENDED'
+                          ? (canUnsuspendMember && <Button type="button" onClick={() => unsuspend(uid)}>{lt('Unsuspend')}</Button>)
+                          : <Button type="button" onClick={() => suspend(uid)}>{lt('Suspend')}</Button>)}
+                        {canRemoveMember && (
+                          <Button
+                            type="button"
+                            variant="danger"
+                            disabled={removingUserId != null && Number(removingUserId) === Number(uid)}
+                            onClick={() => remove(uid)}
+                            data-testid={`member-remove-${uid}`}
+                          >
+                            {removingUserId != null && Number(removingUserId) === Number(uid) ? lt('Removing…') : lt('Remove')}
+                          </Button>
+                        )}
                       </>
                     )}
                   </div>
                 </li>
-              ))}
+                );
+              })}
               {!members?.length && <li className="py-3 text-sm text-ink-soft">{lt('No members yet.')}</li>}
             </ul>
           </Card>
@@ -542,23 +860,44 @@ export function SettingsTeamAccess() {
 
       {tab === 'roles' && !state.loading && (
         <Card className="p-5">
-          <p className="mb-2 text-sm font-semibold text-ink">{lt('Roles')}</p>
-          <p className="mb-3 text-xs text-ink-soft">{lt('Edit permissions, Entry Mode, and sensitive data from the backend registry. Owner is not a role.')}</p>
+          <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
+            <div>
+              <p className="text-sm font-semibold text-ink">{lt('Roles')}</p>
+              <p className="text-xs text-ink-soft">{lt('Edit permissions, Entry Mode, and sensitive data from the backend registry. Owner is not a role.')}</p>
+            </div>
+            {canEditRoles && (
+              <Button
+                variant="primary"
+                data-testid="create-role-button"
+                onClick={() => { setCreateRoleOpen(true); setCreateRoleForm({ displayName: '', entryMode: 'BOTH' }); }}
+              >
+                {lt('Create role')}
+              </Button>
+            )}
+          </div>
           <ul className="divide-y divide-line">
-            {(roles || []).map((r) => (
-              <li key={r.id} className="flex flex-wrap items-center justify-between gap-3 py-3">
-                <div>
-                  <p className="text-sm font-semibold text-ink">{r.display_name || r.name}</p>
-                  <p className="text-xs text-ink-soft">
-                    {r.system_key || 'Custom'} · Entry {r.entry_mode || 'BOTH'}
-                    {r.is_builtin ? ' · Built-in' : ''}
-                  </p>
-                </div>
-                {canEditRoles && (
-                  <Button onClick={() => openRoleEditor(r)} data-testid={`role-edit-${r.id}`}>{lt('Edit role')}</Button>
-                )}
-              </li>
-            ))}
+            {(roles || []).map((r) => {
+              const isSystem = !!(r.system_key || r.is_builtin);
+              return (
+                <li key={r.id} className="flex flex-wrap items-center justify-between gap-3 py-3">
+                  <div>
+                    <p className="text-sm font-semibold text-ink">{r.display_name || r.name}</p>
+                    <p className="text-xs text-ink-soft">
+                      {r.system_key || 'Custom'} · Entry {r.entry_mode || 'BOTH'}
+                      {r.is_builtin ? ' · Built-in' : ''}
+                    </p>
+                  </div>
+                  <div className="flex flex-wrap gap-2">
+                    {canEditRoles && (
+                      <Button onClick={() => openRoleEditor(r)} data-testid={`role-edit-${r.id}`}>{lt('Edit role')}</Button>
+                    )}
+                    {canEditRoles && !isSystem && (
+                      <Button onClick={() => deleteRole(r)} data-testid={`role-delete-${r.id}`}>{lt('Delete')}</Button>
+                    )}
+                  </div>
+                </li>
+              );
+            })}
           </ul>
         </Card>
       )}
@@ -567,15 +906,20 @@ export function SettingsTeamAccess() {
         <Card className="p-5">
           <p className="mb-2 text-sm font-semibold text-ink">{lt('Activity')}</p>
           <ul className="divide-y divide-line">
-            {(audit || []).map((row) => (
-              <li key={row.id} className="py-3">
-                <p className="text-sm font-semibold text-ink">{row.action || row.event}</p>
-                <p className="text-xs text-ink-soft">
-                  {row.created_at ? new Date(Number(row.created_at) * 1000).toLocaleString() : ''}
-                  {row.actor_user_id ? ` · user ${row.actor_user_id}` : ''}
-                </p>
-              </li>
-            ))}
+            {(audit || []).map((row) => {
+              const actor = auditActorLabel(row);
+              const when = row.created_at
+                ? new Date(Number(row.created_at) * 1000).toLocaleString()
+                : '';
+              return (
+                <li key={row.id} className="py-3">
+                  <p className="text-sm font-semibold text-ink">{lt(humanizeAudit(row))}</p>
+                  <p className="text-xs text-ink-soft">
+                    {[when, actor].filter(Boolean).join(' · ')}
+                  </p>
+                </li>
+              );
+            })}
             {!audit?.length && <li className="py-3 text-sm text-ink-soft">{lt('No activity yet.')}</li>}
           </ul>
         </Card>
@@ -766,6 +1110,46 @@ export function SettingsTeamAccess() {
         <select className="h-11 w-full rounded-lg border border-line bg-surface px-3 text-sm" value={changeRoleId} onChange={(e) => setChangeRoleId(e.target.value)}>
           {roles.map((r) => <option key={r.id} value={r.id}>{r.display_name || r.name}</option>)}
         </select>
+      </Modal>
+
+      <Modal
+        open={createRoleOpen}
+        onClose={() => setCreateRoleOpen(false)}
+        title={lt('Create role')}
+        testid="create-role-modal"
+        footer={(
+          <>
+            <Button onClick={() => setCreateRoleOpen(false)}>{lt('Cancel')}</Button>
+            <Button variant="primary" disabled={createRoleSaving} onClick={createRole}>
+              {createRoleSaving ? lt('Creating…') : lt('Create')}
+            </Button>
+          </>
+        )}
+      >
+        <div className="space-y-4">
+          <div>
+            <label className="mb-1 block text-xs font-bold uppercase text-ink-soft">{lt('Display name')}</label>
+            <Input
+              value={createRoleForm.displayName}
+              onChange={(e) => setCreateRoleForm((f) => ({ ...f, displayName: e.target.value }))}
+              placeholder={lt('e.g. Sales Desk')}
+            />
+          </div>
+          <div>
+            <p className="mb-2 text-sm font-semibold text-ink">{lt('Entry Mode')}</p>
+            {['OPTIONAL', 'REGULAR', 'BOTH'].map((m) => (
+              <label key={m} className="mr-4 inline-flex items-center gap-2 text-sm">
+                <input
+                  type="radio"
+                  name="createEntryMode"
+                  checked={createRoleForm.entryMode === m}
+                  onChange={() => setCreateRoleForm((f) => ({ ...f, entryMode: m }))}
+                />
+                {m === 'OPTIONAL' ? lt('Optional only') : m === 'REGULAR' ? lt('Regular only') : lt('Both')}
+              </label>
+            ))}
+          </div>
+        </div>
       </Modal>
     </PageSection>
   );

@@ -5,6 +5,7 @@ import { useCallback, useEffect, useMemo, useState } from 'react';
 import { Link } from 'react-router-dom';
 import { Card, Button, Input, useLabelT } from '../../components/kit';
 import { useWorkspace } from '../../contexts/WorkspaceContext';
+import { useAuth } from '../../contexts/AuthContext';
 import api from '../../services/api';
 
 const TABS = [
@@ -18,6 +19,28 @@ const TABS = [
 
 function unwrap(res) {
   return res?.data ?? res;
+}
+
+function loadRazorpayScript() {
+  return new Promise((resolve, reject) => {
+    if (typeof window !== 'undefined' && window.Razorpay) {
+      resolve();
+      return;
+    }
+    const existing = document.querySelector('script[data-razorpay]');
+    if (existing) {
+      existing.addEventListener('load', () => resolve());
+      existing.addEventListener('error', reject);
+      return;
+    }
+    const s = document.createElement('script');
+    s.src = 'https://checkout.razorpay.com/v1/checkout.js';
+    s.async = true;
+    s.dataset.razorpay = '1';
+    s.onload = () => resolve();
+    s.onerror = () => reject(new Error('Failed to load Razorpay'));
+    document.body.appendChild(s);
+  });
 }
 
 function parseMeta(row) {
@@ -39,7 +62,8 @@ function usageLabel(row) {
 
 export function SettingsBilling() {
   const lt = useLabelT();
-  const { currentWorkspace, can, membershipType, reloadWorkspaces, workspaces } = useWorkspace();
+  const { showToast } = useAuth();
+  const { currentWorkspace, membershipType, reloadWorkspaces, workspaces } = useWorkspace();
   const [tab, setTab] = useState('overview');
   const [overview, setOverview] = useState(null);
   const [rates, setRates] = useState([]);
@@ -50,9 +74,15 @@ export function SettingsBilling() {
   const [orders, setOrders] = useState([]);
   const [rechargeCredits, setRechargeCredits] = useState('100');
   const [rechargeAmount, setRechargeAmount] = useState('1000');
+  const [razorpayConfigured, setRazorpayConfigured] = useState(null); // null unknown, true/false after probe
   const [state, setState] = useState({ loading: true, error: '', message: '' });
   const wsId = currentWorkspace?.id;
-  const isOwner = membershipType === 'OWNER' || can('billing.manage') || can('credits.recharge');
+  // Wave 4: Billing Owner-only (Admin GST/EWB ≠ Billing)
+  const isOwner = membershipType === 'OWNER';
+  // Never show Complete order (dev) in production; non-prod requires explicit ALLOW_DEV
+  const allowDevCompleteOrder =
+    import.meta.env.PROD !== true
+    && String(import.meta.env.VITE_ALLOW_DEV || '').toLowerCase() === 'true';
 
   const load = useCallback(async () => {
     setState((s) => ({ ...s, loading: true, error: '' }));
@@ -94,10 +124,14 @@ export function SettingsBilling() {
     setState((s) => ({ ...s, message: '', error: '' }));
     try {
       await api.purchaseWorkspaceSeat(wsId);
-      setState((s) => ({ ...s, message: lt('Seat purchased.') }));
+      const msg = lt('Seat purchased.');
+      setState((s) => ({ ...s, message: msg }));
+      showToast?.(msg, 'success');
       await load();
     } catch (err) {
-      setState((s) => ({ ...s, error: err?.data?.error?.message || err.message }));
+      const msg = err?.data?.error?.message || err.message || lt('Seat purchase failed');
+      setState((s) => ({ ...s, error: msg }));
+      showToast?.(msg, 'warning');
     }
   };
 
@@ -108,16 +142,28 @@ export function SettingsBilling() {
     setState((s) => ({ ...s, message: '', error: '' }));
     try {
       await api.createWorkspace({ name: name.trim() });
-      setState((s) => ({ ...s, message: lt('Workspace created.') }));
+      const msg = lt('Workspace created.');
+      setState((s) => ({ ...s, message: msg }));
+      showToast?.(msg, 'success');
       await reloadWorkspaces?.();
       await load();
     } catch (err) {
-      setState((s) => ({ ...s, error: err?.data?.error?.message || err.message }));
+      const msg = err?.data?.error?.message || err.message || lt('Could not create workspace');
+      setState((s) => ({ ...s, error: msg }));
+      showToast?.(msg, 'warning');
     }
   };
 
   const createOrder = async () => {
     if (!isOwner) return;
+    if (razorpayConfigured === false) {
+      setState((s) => ({
+        ...s,
+        error: lt('Payment checkout is unavailable until Razorpay is configured.'),
+        message: '',
+      }));
+      return;
+    }
     const credits = Number(rechargeCredits);
     const amountInr = Number(rechargeAmount);
     if (!Number.isFinite(credits) || credits <= 0) {
@@ -126,18 +172,80 @@ export function SettingsBilling() {
     }
     setState((s) => ({ ...s, message: '', error: '' }));
     try {
-      await api.createBillingPaymentOrder({
+      const res = await api.createBillingRechargeOrder({
         credits,
-        amountInr,
-        amount_inr: amountInr,
+        workspaceId: wsId,
       });
-      setState((s) => ({ ...s, message: lt('Payment order created (pending).') }));
-      await load();
-      setTab('overview');
+      const razorpayPayload = unwrap(res);
+
+      if (razorpayPayload?.configured === false) {
+        setRazorpayConfigured(false);
+        setState((s) => ({
+          ...s,
+          error: lt('Payment checkout is unavailable until Razorpay is configured.'),
+          message: '',
+        }));
+        return;
+      }
+
+      const keyId = razorpayPayload?.razorpayKeyId || razorpayPayload?.key_id;
+      const orderId = razorpayPayload?.razorpayOrderId || razorpayPayload?.razorpay_order_id;
+      const amountPaise = razorpayPayload?.amountPaise || Math.round((razorpayPayload?.amountInr || amountInr) * 100);
+
+      if (!keyId || !orderId) {
+        setRazorpayConfigured(false);
+        setState((s) => ({
+          ...s,
+          error: lt('Payment checkout is unavailable until Razorpay is configured.'),
+          message: '',
+        }));
+        return;
+      }
+
+      setRazorpayConfigured(true);
+      if (typeof window !== 'undefined') {
+        await loadRazorpayScript();
+        const options = {
+          key: keyId,
+          amount: amountPaise,
+          currency: razorpayPayload?.currency || 'INR',
+          name: 'TallyDekho',
+          description: `${credits} credits`,
+          order_id: orderId,
+          handler: async (response) => {
+            try {
+              await api.verifyBillingRecharge({
+                razorpay_order_id: response.razorpay_order_id,
+                razorpay_payment_id: response.razorpay_payment_id,
+                razorpay_signature: response.razorpay_signature,
+              });
+              setState((s) => ({ ...s, message: lt('Payment verified — credits applied.') }));
+              await load();
+            } catch (vErr) {
+              setState((s) => ({ ...s, error: vErr?.data?.error?.message || vErr.message }));
+            }
+          },
+        };
+        // eslint-disable-next-line no-undef
+        const rzp = new window.Razorpay(options);
+        rzp.open();
+        setState((s) => ({ ...s, message: lt('Razorpay checkout opened.') }));
+      }
     } catch (err) {
+      const code = err?.data?.error?.code || err?.code || '';
+      const status = err?.status;
+      if (status === 503 || code === 'PAYMENT_PROVIDER_NOT_CONFIGURED') {
+        setRazorpayConfigured(false);
+        setState((s) => ({
+          ...s,
+          error: lt('Payment checkout is unavailable until Razorpay is configured.'),
+          message: '',
+        }));
+        return;
+      }
       setState((s) => ({
         ...s,
-        error: err?.status === 404
+        error: status === 404
           ? lt('Payment order API not available yet on this backend.')
           : (err?.data?.error?.message || err.message),
       }));
@@ -208,7 +316,12 @@ export function SettingsBilling() {
 
               <Card className="space-y-3 p-5" data-testid="billing-recharge">
                 <p className="text-sm font-semibold text-ink">{lt('Recharge Credits')}</p>
-                <p className="text-xs text-ink-soft">{lt('Create a payment order, then complete it (dev) when payment gateway is not connected.')}</p>
+                <p className="text-xs text-ink-soft">{lt('Pay with Razorpay when configured. Checkout is disabled until payment is ready.')}</p>
+                {razorpayConfigured === false && (
+                  <p className="rounded-lg border border-warn/30 bg-warn-bg px-3 py-2 text-[13px] font-medium text-ink">
+                    {lt('Payment checkout is unavailable until Razorpay is configured.')}
+                  </p>
+                )}
                 <div className="grid gap-3 sm:grid-cols-2">
                   <div>
                     <label className="mb-1 block text-xs font-bold uppercase text-ink-soft">{lt('Credits')}</label>
@@ -219,8 +332,14 @@ export function SettingsBilling() {
                     <Input value={rechargeAmount} onChange={(e) => setRechargeAmount(e.target.value)} />
                   </div>
                 </div>
-                <Button variant="primary" onClick={createOrder}>{lt('Create payment order')}</Button>
-                {pendingOrders.length > 0 && (
+                <Button
+                  variant="primary"
+                  onClick={createOrder}
+                  disabled={razorpayConfigured === false}
+                >
+                  {lt('Recharge')}
+                </Button>
+                {allowDevCompleteOrder && pendingOrders.length > 0 && (
                   <ul className="divide-y divide-line">
                     {pendingOrders.map((o) => (
                       <li key={o.id} className="flex flex-wrap items-center justify-between gap-2 py-2 text-sm">

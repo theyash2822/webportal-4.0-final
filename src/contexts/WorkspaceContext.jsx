@@ -3,10 +3,12 @@ import { useAuth } from './AuthContext';
 import {
   fetchMyWorkspaces,
   fetchWorkspaceContext,
+  fetchMyInvitations,
   setWorkspaceId,
   getWorkspaceId,
 } from '../services/api';
 import { flag } from '../config/featureFlags.js';
+import { canCreateWithEntryMode } from '../utils/entryMode.js';
 import wsService from '../services/websocket';
 
 const WorkspaceContext = createContext(null);
@@ -40,14 +42,26 @@ export function WorkspaceProvider({ children }) {
   const [sensitivePolicies, setSensitivePolicies] = useState({});
   const [scopes, setScopes] = useState(null);
   const [pairing, setPairing] = useState(null);
+  const [invitations, setInvitations] = useState([]);
   const [wsBootstrapping, setWsBootstrapping] = useState(false);
   const [wsError, setWsError] = useState(null);
   const capSet = useMemo(() => new Set(capabilities || []), [capabilities]);
 
+  const pairingStatus = useMemo(
+    () => String(pairing?.status || '').toUpperCase() || null,
+    [pairing],
+  );
+  // Mobile SoT: demoMode = UNPAIRED || RECONNECTING; CONNECTED never Demo
+  const demoMode = pairingStatus
+    ? (pairingStatus === 'UNPAIRED' || pairingStatus === 'RECONNECTING')
+    : true; // fail-closed Demo when status unknown — never use isPaired for live eligibility
+  const roleSystemKey = role?.systemKey || role?.system_key || null;
+  const isOwnerOrAdmin = membershipType === 'OWNER' || roleSystemKey === 'ADMIN';
+
   const applyContext = useCallback((ctx) => {
     if (!ctx?.workspace) return;
     setCurrentWorkspace(ctx.workspace);
-    setMembershipType(ctx.access?.membershipType || null);
+    setMembershipType(ctx.access?.membershipType || ctx.access?.membership_type || null);
     setRole(ctx.access?.role || null);
     setCapabilities(ctx.access?.capabilities || []);
     setEntryMode(ctx.access?.entryMode || 'BOTH');
@@ -67,6 +81,23 @@ export function WorkspaceProvider({ children }) {
       markUnpaired?.();
     }
   }, [markPaired, markUnpaired]);
+
+  const refreshInvitations = useCallback(async () => {
+    if (!token) {
+      setInvitations([]);
+      return [];
+    }
+    try {
+      const res = await fetchMyInvitations();
+      const list = unwrap(res);
+      const arr = Array.isArray(list) ? list : (list?.invitations || []);
+      setInvitations(arr);
+      return arr;
+    } catch (err) {
+      setInvitations([]);
+      throw err;
+    }
+  }, [token]);
 
   const loadWorkspaceContext = useCallback(async (workspaceId) => {
     const res = await fetchWorkspaceContext(workspaceId);
@@ -97,8 +128,19 @@ export function WorkspaceProvider({ children }) {
         return;
       }
       const ctx = await loadWorkspaceContext(target.id);
-      syncPairingFromCtx(ctx, { allowUnpair: false });
-      await loadCompanies?.({ forceDefaultFY: false });
+      const status = String(ctx?.pairing?.status || '').toUpperCase();
+      // Align Auth isPaired with server pairing. CONNECTED never demoOnly; UNPAIRED|RECONNECTING → Demo.
+      const inDemo = status === 'UNPAIRED' || status === 'RECONNECTING'
+        || (!status && localStorage.getItem('isPaired') !== 'true');
+      if (status === 'CONNECTED' || status === 'RECONNECTING') markPaired?.();
+      else if (status === 'UNPAIRED') markUnpaired?.();
+      await loadCompanies?.({
+        forceDefaultFY: inDemo,
+        demoOnly: status === 'CONNECTED' ? false : inDemo,
+      });
+      await refreshInvitations().catch((e) => {
+        console.warn('[Workspace] invitations refresh:', e?.message);
+      });
     } catch (err) {
       console.warn('[Workspace] bootstrap failed:', err.message);
       setWsError(err.message);
@@ -106,13 +148,14 @@ export function WorkspaceProvider({ children }) {
     } finally {
       setWsBootstrapping(false);
     }
-  }, [token, loadWorkspaceContext, syncPairingFromCtx, loadCompanies]);
+  }, [token, loadWorkspaceContext, loadCompanies, markPaired, markUnpaired, refreshInvitations]);
 
   useEffect(() => {
     if (!token) {
       setWorkspaces([]);
       setCurrentWorkspace(null);
       setCapabilities([]);
+      setInvitations([]);
       setWorkspaceId(null);
       return;
     }
@@ -128,13 +171,24 @@ export function WorkspaceProvider({ children }) {
       console.info(`[Workspace] ${evt}`, data);
       if (currentWorkspace?.id) {
         loadWorkspaceContext(currentWorkspace.id)
-          .then((ctx) => syncPairingFromCtx(ctx, { allowUnpair: false }))
+          .then(async (ctx) => {
+            const fromEvt = String(data?.status || '').toUpperCase();
+            const fromCtx = String(ctx?.pairing?.status || '').toUpperCase();
+            const status = evt === 'unpaired' ? 'UNPAIRED' : (fromEvt || fromCtx);
+            syncPairingFromCtx(ctx, { allowUnpair: status === 'UNPAIRED' });
+            if (status === 'CONNECTED') {
+              await loadCompanies?.({ demoOnly: false, forceDefaultFY: true });
+            } else if (status === 'UNPAIRED' || status === 'RECONNECTING') {
+              await loadCompanies?.({ demoOnly: true, forceDefaultFY: true });
+            }
+          })
           .catch(() => {});
       }
     };
 
     const unInvitation = wsService.on('invitation', (data) => {
       showToast?.(data?.message || 'New workspace invitation', 'info');
+      refreshInvitations();
       refreshList();
     });
     const unMembership = wsService.on('membership_changed', () => {
@@ -153,15 +207,19 @@ export function WorkspaceProvider({ children }) {
     const unHardStatus = wsService.on('hard_sync_status', (data) => softTally('hard_sync_status', data));
     const unRestoreReq = wsService.on('restore_request', (data) => softTally('restore_request', data));
     const unRestoreStatus = wsService.on('restore_status', (data) => softTally('restore_status', data));
+    const unSynced = wsService.on('synced', (data) => softTally('synced', data));
+    const unTallyConn = wsService.on('tally_connection', (data) => softTally('tally_connection', data));
+    const unUnpaired = wsService.on('unpaired', (data) => softTally('unpaired', data));
     const unBilling = wsService.on('billing_updated', () => {
       console.info('[Workspace] billing_updated');
     });
 
     return () => {
       unInvitation(); unMembership(); unRevoked(); unAccess();
-      unHardReq(); unHardStatus(); unRestoreReq(); unRestoreStatus(); unBilling();
+      unHardReq(); unHardStatus(); unRestoreReq(); unRestoreStatus();
+      unSynced(); unTallyConn(); unUnpaired(); unBilling();
     };
-  }, [token, bootstrap, currentWorkspace?.id, loadWorkspaceContext, syncPairingFromCtx, showToast]);
+  }, [token, bootstrap, currentWorkspace?.id, loadWorkspaceContext, syncPairingFromCtx, showToast, refreshInvitations, loadCompanies]);
 
   const switchWorkspace = useCallback(async (workspaceId) => {
     if (!workspaceId || workspaceId === currentWorkspace?.id) return;
@@ -170,24 +228,25 @@ export function WorkspaceProvider({ children }) {
     setWorkspaceId(workspaceId);
     const ctx = await loadWorkspaceContext(workspaceId);
     syncPairingFromCtx(ctx, { allowUnpair: true });
-    await loadCompanies?.({ forceDefaultFY: true });
+    const status = String(ctx?.pairing?.status || '').toUpperCase();
+    const inDemo = status === 'UNPAIRED' || status === 'RECONNECTING' || !status;
+    await loadCompanies?.({
+      forceDefaultFY: true,
+      demoOnly: status === 'CONNECTED' ? false : inDemo,
+    });
     showToast?.('Workspace switched', 'success');
   }, [currentWorkspace?.id, loadWorkspaceContext, syncPairingFromCtx, clearCompaniesState, loadCompanies, showToast]);
 
   const can = useCallback((capabilityKey) => {
-    if (!flag('rbas_enabled')) return true;
+    // Fail closed: empty/unknown caps never elevate (OWNER always allowed)
     if (membershipType === 'OWNER') return true;
     if (!capabilityKey) return false;
-    if (!capabilities?.length && membershipType === 'OWNER') return true;
     return capSet.has(capabilityKey);
-  }, [capSet, capabilities, membershipType]);
+  }, [capSet, membershipType]);
 
   const canCreate = useCallback((createKey, { optional = false } = {}) => {
     if (!can(createKey)) return false;
-    if (createKey !== 'sales_invoice.create' && createKey !== 'sales_order.create') return true;
-    if (entryMode === 'BOTH') return true;
-    if (optional) return entryMode === 'OPTIONAL' || entryMode === 'BOTH';
-    return entryMode === 'REGULAR' || entryMode === 'BOTH';
+    return canCreateWithEntryMode(entryMode, createKey, { optional });
   }, [can, entryMode]);
 
   const value = {
@@ -200,6 +259,11 @@ export function WorkspaceProvider({ children }) {
     sensitivePolicies,
     scopes,
     pairing,
+    pairingStatus: pairingStatus || 'UNPAIRED',
+    demoMode,
+    isOwnerOrAdmin,
+    invitations,
+    refreshInvitations,
     wsBootstrapping,
     wsError,
     can,
@@ -241,6 +305,11 @@ export function useWorkspace() {
       sensitivePolicies: {},
       scopes: null,
       pairing: null,
+      pairingStatus: 'UNPAIRED',
+      demoMode: true,
+      isOwnerOrAdmin: false,
+      invitations: [],
+      refreshInvitations: async () => [],
       wsBootstrapping: false,
       wsError: null,
       can: () => true,

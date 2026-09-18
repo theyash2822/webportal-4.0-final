@@ -67,19 +67,23 @@ Source: `src/App.jsx` (Web Portal 3.0 routes, Vite)
 | /ledgers | src/pages/masters.jsx |
 | /ai-insights | src/pages/masters.jsx |
 | /notifications | → / |
-| /settings | → /settings/profile (ModuleLayout sections) |
-| /settings/* | src/pages/Settings.jsx |
+| /settings | → /settings/profile (SettingsLayout — Account \| Workspace \| Connection \| …) |
+| /settings/* | src/pages/Settings.jsx (+ settings/* dedicated pages) |
+| Settings › Account | Profile, License |
+| Settings › Workspace | Company, Team & Access, Invitations, Billing & Credits, Payment modes, Workspace lifecycle |
+| Settings › Connection | Tally Sync, Bank Feeds, Security (Tally Sync stays here — not under Workspace) |
 | /settings/notification-channels | Channels & Quiet Hours — `/api/notification-settings` (`*_enabled` + quiet hours) |
 | /settings/payment-reminders | Multi reminders — `/api/alert-settings` `payment_reminders` |
 | /settings/compliance-reminders | Four cards — `/api/alert-settings` `compliance_reminders` |
 | /settings/stock-alerts | Multi entry list — `/api/alert-settings` `stock_alerts` |
-| /settings/einvoice | 3-state applicability + IRP credentials (`/api/integration-settings` `einvoice`) |
-| /settings/ewb | 3-state applicability + GSP credentials (`ewb`) |
-| /settings/team | src/pages/settings/TeamAccess.jsx — Members / Roles (editor) / Activity + Data access (module-aware ledger groups) |
-| /settings/billing | src/pages/settings/Billing.jsx — Billing & Credits (Owner): Overview/Usage/Seats/Transactions/Invoices/Integrations + recharge |
-| /settings/payment-modes | src/pages/settings/PaymentModes.jsx — Cash/UPI/Bank/Cheque → ledger map |
-| /settings/workspace-lifecycle | src/pages/settings/WorkspaceLifecycle.jsx — Transfer (member+role) / Reset / Close (triple confirm + grace) |
-| /settings/tally-sync | SettingsTallySync — live `GET /api/tally-sync/status`, `POST /api/tally-sync/pair`, `POST /api/tally-sync/unpair` |
+| /settings/einvoice | Applicability + IRP credentials + workspace activate (`RequireCapability`) |
+| /settings/ewb | Applicability + GSP credentials + workspace activate (`RequireCapability`) |
+| /settings/team | TeamAccess — invite scopes (FY/ledger/godown/CC), Role CRUD, Data access (`RequireCapability`) |
+| /settings/billing | Billing — Owner-only Razorpay checkout (fail-closed if unconfigured); no prod Complete-order (dev) |
+| /settings/payment-modes | PaymentModes — Cash/UPI/Bank/Cheque → ledger map (nav gated) |
+| /settings/workspace-lifecycle | Transfer / Reset / Close — Owner-only (`RequireCapability ownerOnly`) |
+| /settings/invitations | Received (`GET /api/me/invitations`) + Sent pending (`GET /api/workspaces/:id/invitations`) |
+| /settings/tally-sync | SettingsTallySync — Demo when UNPAIRED\|RECONNECTING; HS/Restore approve Owner/Admin |
 
 ## Create drawer (AppShell)
 | Kind | Component File |
@@ -91,7 +95,9 @@ Source: `src/App.jsx` (Web Portal 3.0 routes, Vite)
 ## Layout Components
 | Component | File | Purpose |
 |-----------|------|---------|
-| AppShell | src/layouts/AppShell.jsx | 3.0 sidebar + header + command search |
-| ModuleLayout | src/layouts/ModuleLayout.jsx | Segmented tabs / inventory sections |
+| AppShell | src/layouts/AppShell.jsx | 3.0 sidebar + header + command search (company/FY via WorkspaceContext) |
+| SettingsLayout | src/layouts/SettingsLayout.jsx | Filters SETTINGS_SECTIONS by capability |
+| ModuleLayout | src/layouts/ModuleLayout.jsx | Segmented tabs / inventory / settings sections |
+| RequireCapability | src/components/RequireCapability.jsx | Settings route guard — Ask-admin message |
 | Drawer | src/components/kit.jsx | 3.0 slide-out (bg-paper + bg-ink/20) |
 | CreateDrawer | src/components/create/CreateDrawer.jsx | Global create stack |

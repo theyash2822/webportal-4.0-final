@@ -403,9 +403,15 @@ export function SettingsCompany() {
 export function SettingsTallySync() {
   const lt = useLabelT();
   const { isPaired, isDesktopOnline, markPaired, markUnpaired, loadCompanies, unpairFromTally } = useAuth();
-  const { can, pairing, membershipType } = useWorkspace();
-  const canPair = membershipType === 'OWNER' || can('tally.pair') || can('workspace.tally.pair');
-  const canUnpair = membershipType === 'OWNER' || can('tally.unpair') || can('workspace.tally.unpair');
+  const { pairing, membershipType, isOwnerOrAdmin, pairingStatus, currentWorkspace, loadWorkspaceContext } = useWorkspace();
+  // Server-provided action flags (fallback to Owner/Admin membership only — never editable tally.pair cap)
+  const canPair = typeof pairing?.canPair === 'boolean'
+    ? pairing.canPair
+    : isOwnerOrAdmin;
+  const canUnpair = typeof pairing?.canUnpair === 'boolean'
+    ? pairing.canUnpair
+    : isOwnerOrAdmin;
+  const canApprove = isOwnerOrAdmin;
   const [code, setCode] = useState('');
   const [device, setDevice] = useState(null);
   const [paired, setPaired] = useState(isPaired);
@@ -413,8 +419,16 @@ export function SettingsTallySync() {
   const [restoreCode, setRestoreCode] = useState('');
   const [approvals, setApprovals] = useState({ hardSync: [], backups: [], restoreRequests: [] });
   const [state, setState] = useState({ loading: true, saving: false, error: '', message: '' });
-  const connectionLabel = pairing?.status
-    || (paired ? (online ? 'CONNECTED' : 'RECONNECTING') : 'UNPAIRED');
+  // Prefer backend pairing.status — never synthesize CONNECTED from paired+online
+  const connectionLabel = (() => {
+    const fromWs = String(pairing?.status || pairingStatus || '').toUpperCase();
+    if (fromWs) return fromWs;
+    return paired ? 'RECONNECTING' : 'UNPAIRED';
+  })();
+  const reconnecting = connectionLabel === 'RECONNECTING';
+  const demoMode = connectionLabel === 'UNPAIRED' || connectionLabel === 'RECONNECTING';
+  // Unpair only exists when a Desktop is actually bound. UNPAIRED / Demo-only has nothing to unpair.
+  const showUnpair = canUnpair && (connectionLabel === 'CONNECTED' || connectionLabel === 'RECONNECTING');
   const load = useCallback(async () => {
     setState(s => ({ ...s, loading: true, error: '' }));
     try {
@@ -444,22 +458,42 @@ export function SettingsTallySync() {
     const un1 = wsService.on('hard_sync_request', () => { load(); });
     const un2 = wsService.on('hard_sync_status', () => { load(); });
     const un3 = wsService.on('restore_status', () => { load(); });
-    return () => { un1(); un2(); un3(); };
+    const un4 = wsService.on('tally_connection', () => { load(); });
+    const un5 = wsService.on('synced', () => { load(); });
+    const un6 = wsService.on('unpaired', () => { load(); });
+    return () => { un1(); un2(); un3(); un4(); un5(); un6(); };
   }, [load]);
   const pair = async () => {
     if (!canPair) return setState(s => ({ ...s, error: lt('Not allowed. Ask your Workspace administrator.'), message: '' }));
     if (!code.trim()) return setState(s => ({ ...s, error: lt('Enter the pairing code shown by the desktop agent.'), message: '' }));
+    const wsId = currentWorkspace?.id;
+    if (!wsId) return setState(s => ({ ...s, error: lt('No workspace selected.'), message: '' }));
     setState(s => ({ ...s, saving: true, error: '', message: '' }));
     try {
-      const response = await api.pairWithTally(code.trim());
-      markPaired();
+      const response = await api.pairWorkspaceTally(wsId, code.trim());
+      const awaiting = response?.data?.awaiting_desktop_claim;
+      if (!awaiting) markPaired();
       setPaired(true);
       setCode('');
-      await loadCompanies();
-      setState(s => ({ ...s, saving: false, message: response?.data?.message || lt('Paired successfully.') }));
+      await loadCompanies({ forceDefaultFY: true, demoOnly: true });
+      await loadWorkspaceContext?.(wsId);
+      setState(s => ({
+        ...s,
+        saving: false,
+        message:
+          response?.data?.message ||
+          lt('Desktop connected. Waiting for the first successful Tally sync before showing live data.'),
+      }));
       await load();
     } catch (err) {
-      const msg = err?.data?.error?.message || err?.message || lt('Pairing failed');
+      const codeErr = err?.code || err?.data?.error?.code;
+      const backend = err?.data?.error?.message || err?.message;
+      const msg =
+        codeErr === 'DEVICE_ALREADY_PAIRED'
+          ? (backend || lt('This Tally Desktop is already connected to another TallyDekho workspace.'))
+          : codeErr === 'WORKSPACE_ALREADY_HAS_DESKTOP'
+            ? (backend || lt('This Workspace already has a connected Tally Desktop. If the old computer is unavailable, use Restore / Replace Computer.'))
+            : (backend || lt('Pairing failed'));
       setState(s => ({ ...s, saving: false, error: msg }));
     }
   };
@@ -471,6 +505,8 @@ export function SettingsTallySync() {
       setPaired(false);
       setOnline(false);
       setDevice(null);
+      const wsId = currentWorkspace?.id;
+      if (wsId) await loadWorkspaceContext?.(wsId);
       setState(s => ({ ...s, saving: false, message: lt('Unpaired. Workspace is in Demo Mode until re-paired and synced.') }));
     } catch (err) {
       setState(s => ({ ...s, saving: false, error: err?.message || lt('Unpair failed') }));
@@ -485,7 +521,7 @@ export function SettingsTallySync() {
       sub="Pair this portal with the Tally desktop agent"
       testid="settings-tally-sync"
       actions={
-        canUnpair ? (
+        showUnpair ? (
           <Button variant="danger" data-testid="unpair-button" disabled={state.saving} onClick={unpair}>
             {state.saving ? lt('Working…') : lt('Unpair')}
           </Button>
@@ -496,11 +532,30 @@ export function SettingsTallySync() {
       <Card className="p-5">
         <div className="mb-3 flex flex-wrap items-center gap-2">
           <span className="text-xs font-bold uppercase tracking-wider text-ink-soft">{lt('Tally connection')}</span>
-          <Pill tone={connectionLabel === 'CONNECTED' ? 'pos' : connectionLabel === 'UNPAIRED' ? 'warn' : 'warn'}>
-            {connectionLabel}
+          {demoMode && (
+            <Pill tone="warn" data-testid="demo-mode-pill">
+              {reconnecting ? lt('Paired · waiting for first sync') : lt('Demo Mode')}
+            </Pill>
+          )}
+          <Pill tone={connectionLabel === 'CONNECTED' ? 'pos' : 'warn'}>
+            {connectionLabel === 'UNPAIRED'
+              ? lt('UNPAIRED · Demo Mode')
+              : connectionLabel === 'RECONNECTING'
+                ? lt('RECONNECTING · waiting for first sync')
+                : connectionLabel}
           </Pill>
           <span className="text-[11px] text-ink-faint">{lt('Connected · Unpaired · Reconnecting · Restore Pending · Hard Sync Pending')}</span>
         </div>
+        {connectionLabel === 'UNPAIRED' && (
+          <p className="mb-3 rounded-lg border border-warn/30 bg-warn-bg px-3 py-2 text-[13px] font-medium text-ink" data-testid="tally-demo-mode-banner">
+            {lt('Demo Mode')} — {lt('Real Tally data is hidden until you pair this workspace and complete a sync.')}
+          </p>
+        )}
+        {reconnecting && (
+          <p className="mb-3 rounded-lg border border-warn/30 bg-warn-bg px-3 py-2 text-[13px] font-medium text-ink" data-testid="tally-reconnecting-banner">
+            {lt('Paired · waiting for first sync')} — {lt('Live books stay hidden until Desktop completes the first sync.')}
+          </p>
+        )}
         {!canPair && (
           <p className="mb-3 text-[12px] text-ink-soft">{lt('Only Owner/Admin can pair or unpair Tally for this workspace.')}</p>
         )}
@@ -525,7 +580,7 @@ export function SettingsTallySync() {
             {lt('One Tally Desktop belongs to only one workspace. If this PC is already paired elsewhere, unpair it there first (Tally Sync → Unpair), then pair it here. If this workspace already has a Desktop, unpair that machine before connecting a new one.')}
           </p>
         )}
-        {canUnpair && (
+        {showUnpair && (
         <div className="mt-4">
           <Button variant="danger" data-testid="unpair-button-card" disabled={state.saving} onClick={unpair}>
             {state.saving ? lt('Working…') : lt('Unpair Tally')}
@@ -539,9 +594,12 @@ export function SettingsTallySync() {
       <Card className="p-5 mt-3" data-testid="workspace-approvals">
         <p className="text-sm font-medium text-ink mb-1">{lt('Hard Sync & Restore approvals')}</p>
         <p className="text-[12px] text-ink-soft mb-3">{lt('Owner/Admin only. First Hard Sync approval wins. Restore needs the desktop restore code plus a backup.')}</p>
-        {(approvals.hardSync || []).length === 0 ? (
+        {!canApprove && (
+          <p className="text-[12px] text-ink-soft">{lt('Only the Workspace Owner or System Admin can approve Hard Sync or Restore.')}</p>
+        )}
+        {canApprove && (approvals.hardSync || []).length === 0 ? (
           <p className="text-[12px] text-ink-faint">{lt('No pending Hard Sync requests.')}</p>
-        ) : approvals.hardSync.map((row) => (
+        ) : canApprove && approvals.hardSync.map((row) => (
           <div key={row.id} className="flex items-center justify-between gap-2 py-2 border-t border-line">
             <span className="text-[12px] text-ink">{row.operation || 'REBUILD'} · {row.device_id?.slice(0, 8)}</span>
             <div className="flex gap-2">
@@ -556,6 +614,7 @@ export function SettingsTallySync() {
             </div>
           </div>
         ))}
+        {canApprove && (
         <div className="mt-4 space-y-2">
           <p className="text-[12px] font-medium text-ink">{lt('Approve restore (new computer)')}</p>
           {(approvals.restoreRequests || []).length === 0 && (
@@ -582,6 +641,7 @@ export function SettingsTallySync() {
             <p className="text-[12px] text-ink-faint">{lt('No cloud backups yet. Run Backup Now on the connected Desktop.')}</p>
           )}
         </div>
+        )}
       </Card>
     </Section>
   );
@@ -1883,6 +1943,91 @@ export function SettingsVoucherConfig() {
   return <VoucherConfigPanel />;
 }
 
+/** Workspace-level activate card for GST / E-Invoice / E-Way (charges Owner wallet). */
+function WorkspaceIntegrationActivate({ domain, title }) {
+  const lt = useLabelT();
+  const { currentWorkspace, can, membershipType } = useWorkspace();
+  const [status, setStatus] = useState(null);
+  const [rates, setRates] = useState([]);
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState('');
+  const [msg, setMsg] = useState('');
+  const wsId = currentWorkspace?.id;
+  const canActivate = membershipType === 'OWNER' || can('integrations.configure') || can('billing.manage');
+  const rateKey = domain === 'einvoice' ? 'EINVOICE_ACTIVATION'
+    : domain === 'eway' ? 'EWAY_ACTIVATION' : 'GST_ACTIVATION';
+
+  const load = useCallback(async () => {
+    if (!wsId) return;
+    setErr('');
+    try {
+      const [intRes, rateRes] = await Promise.all([
+        api.getWorkspaceIntegration(wsId, domain).catch(() => null),
+        api.fetchBillingRates().catch(() => ({ data: [] })),
+      ]);
+      setStatus(intRes?.data ?? intRes);
+      const rateList = rateRes?.data ?? rateRes ?? [];
+      setRates(Array.isArray(rateList) ? rateList : []);
+    } catch (e) {
+      setErr(e?.data?.error?.message || e.message || '');
+    }
+  }, [wsId, domain]);
+
+  useEffect(() => { load(); }, [load]);
+
+  const creditCost = rates.find((r) => String(r.key || '').toUpperCase() === rateKey)?.credits
+    ?? rates.find((r) => String(r.key || '').toUpperCase().includes(domain.toUpperCase()))?.credits
+    ?? 100;
+
+  const activate = async () => {
+    if (!wsId || !canActivate) return;
+    setBusy(true); setErr(''); setMsg('');
+    try {
+      await api.activateWorkspaceIntegration(wsId, domain);
+      setMsg(lt('Integration activated.'));
+      await load();
+    } catch (e) {
+      const code = e?.data?.error?.code || e?.code || '';
+      const message = e?.data?.error?.message || e.message || '';
+      if (/CREDENTIALS_ENCRYPTION_KEY|ENCRYPTION/i.test(code + message)) {
+        setErr(lt('Credential encryption is not configured on this server (CREDENTIALS_ENCRYPTION_KEY). Ask an administrator.'));
+      } else if (/INSUFFICIENT|BILLING_INSUFFICIENT/i.test(code + message) || e?.status === 402) {
+        setErr(lt('Not enough credits. Ask the Workspace Owner to recharge from Billing.'));
+      } else {
+        setErr(message || lt('Activation failed'));
+      }
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const st = String(status?.status || 'NOT_CONFIGURED').toUpperCase();
+
+  return (
+    <Card className="space-y-3 p-5" data-testid={`workspace-integration-${domain}`}>
+      <div className="flex flex-wrap items-center gap-2">
+        <p className="text-sm font-bold text-ink">{lt(title || 'Workspace activation')}</p>
+        <Pill tone={st === 'ACTIVE' ? 'pos' : st === 'CONFIGURED' ? 'warn' : 'warn'}>{st}</Pill>
+      </div>
+      <p className="text-[12px] text-ink-soft">
+        {lt('Activation charges the Owner wallet.')}
+        {' '}
+        {lt('Credit cost')}: <span className="font-semibold text-ink">{creditCost}</span>
+      </p>
+      {err && <p className="text-[13px] text-neg">{err}</p>}
+      {msg && <p className="text-[13px] text-pos">{msg}</p>}
+      {canActivate && st !== 'ACTIVE' && (
+        <Button variant="primary" disabled={busy || !wsId} onClick={activate} data-testid={`activate-integration-${domain}`}>
+          {busy ? lt('Activating…') : lt('Activate (charges wallet)')}
+        </Button>
+      )}
+      {!canActivate && (
+        <p className="text-[12px] text-ink-soft">{lt('Only Owner/Admin can activate integrations.')}</p>
+      )}
+    </Card>
+  );
+}
+
 export function SettingsEInvoice() {
   const lt = useLabelT();
   const { selectedCompany } = useAuth();
@@ -1923,6 +2068,8 @@ export function SettingsEInvoice() {
   const applicable = compliance.value.e_invoice_applicable || 'not_applicable';
   return (
     <Section title="E-Invoice Settings" sub="IRN generation via your GSP" testid="settings-einvoice">
+      <WorkspaceIntegrationActivate domain="gst" title="GST integration activation" />
+      <WorkspaceIntegrationActivate domain="einvoice" title="E-Invoice workspace status" />
       <ConfigState config={compliance}>
       <Card className="space-y-3 p-5">
         <p className="text-sm font-bold text-ink">{lt('Applicability')}</p>
@@ -2061,6 +2208,7 @@ export function SettingsEWB() {
   const applicable = compliance.value.e_way_bill_applicable || 'not_applicable';
   return (
     <Section title="E-Way Bill Settings" sub="Consignment rules and transporter defaults" testid="settings-ewb">
+      <WorkspaceIntegrationActivate domain="eway" title="E-Way Bill workspace status" />
       <ConfigState config={compliance}>
       <Card className="space-y-3 p-5">
         <p className="text-sm font-bold text-ink">{lt('Applicability')}</p>

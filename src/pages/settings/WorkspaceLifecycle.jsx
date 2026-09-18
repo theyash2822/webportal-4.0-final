@@ -45,6 +45,7 @@ export function SettingsWorkspaceLifecycle() {
   const [outgoingRoleId, setOutgoingRoleId] = useState('');
   const [transfer, setTransfer] = useState(null);
   const [confirmToken, setConfirmToken] = useState('');
+  const [devConfirmTokens, setDevConfirmTokens] = useState([]);
   const [lifecycle, setLifecycle] = useState(null);
   const [resetPhrase, setResetPhrase] = useState('');
   const [closePhrase, setClosePhrase] = useState('');
@@ -90,6 +91,22 @@ export function SettingsWorkspaceLifecycle() {
       const data = unwrap(res);
       if (data?.transferId || data?.status?.includes?.('PENDING') || data?.status === 'COMPLETED') {
         setTransfer((t) => ({ ...(t || {}), ...data }));
+      }
+      const tokens = data?.confirmTokens || data?.devTokens || data?.confirm_tokens;
+      const urls = data?.confirmUrls || data?.confirm_urls;
+      if ((Array.isArray(tokens) && tokens.length) || (Array.isArray(urls) && urls.length)) {
+        const rows = [];
+        if (Array.isArray(tokens)) {
+          tokens.forEach((t, i) => {
+            rows.push({ label: `Token ${i + 1}`, value: typeof t === 'string' ? t : (t.token || t.value || JSON.stringify(t)) });
+          });
+        }
+        if (Array.isArray(urls)) {
+          urls.forEach((u, i) => {
+            rows.push({ label: `Link ${i + 1}`, value: typeof u === 'string' ? u : (u.url || JSON.stringify(u)) });
+          });
+        }
+        setDevConfirmTokens(rows);
       }
       if (data?.status === 'PENDING_GRACE' || data?.status === 'PENDING_CONFIRM' || data?.confirm_count != null) {
         setLifecycle((lc) => ({ ...(lc || {}), ...data }));
@@ -169,6 +186,31 @@ export function SettingsWorkspaceLifecycle() {
             >
               {lt('Initiate transfer')}
             </Button>
+
+            {devConfirmTokens.length > 0 && (
+              <div className="rounded-lg border border-warn/40 bg-warn-bg p-3" data-testid="transfer-dev-tokens">
+                <p className="mb-2 text-sm font-semibold text-ink">
+                  {lt('Email not sent — use these confirmation tokens/links')}
+                </p>
+                <ul className="space-y-2">
+                  {devConfirmTokens.map((row) => (
+                    <li key={row.label} className="flex flex-wrap items-center gap-2 text-xs">
+                      <span className="font-bold text-ink-soft">{row.label}</span>
+                      <code className="max-w-full flex-1 truncate rounded border border-line bg-surface px-2 py-1 text-ink">{row.value}</code>
+                      <Button
+                        onClick={() => {
+                          navigator.clipboard?.writeText(row.value).catch(() => {});
+                          setConfirmToken(row.value);
+                          setMsg(lt('Copied to clipboard.'));
+                        }}
+                      >
+                        {lt('Copy')}
+                      </Button>
+                    </li>
+                  ))}
+                </ul>
+              </div>
+            )}
 
             {(transfer || transferStatus) && (
               <div className="rounded-lg border border-line p-3 text-sm">

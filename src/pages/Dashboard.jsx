@@ -10,6 +10,7 @@ import {
 } from 'recharts';
 import api from '../services/api';
 import { useAuth } from '../contexts/AuthContext';
+import { useWorkspace } from '../contexts/WorkspaceContext';
 import { resolvePeriodDates, DASHBOARD_PERIOD_CODE } from '../utils/periodDates';
 import {
   Page, Card, Panel, Button, Pill, Bar as MiniBar, Empty, Skeleton,
@@ -89,7 +90,32 @@ export default function Dashboard() {
   const navigate = useNavigate();
   const { key: routeKey } = useParams();
   const [drill, setDrill] = useState(routeKey && KPI_KEYS.includes(routeKey) ? routeKey : null);
-  const { selectedCompany, selectedFY, isPaired, authBootstrapping, syncVersion } = useAuth();
+  const { authBootstrapping, syncVersion, isPaired: authIsPaired } = useAuth();
+  const {
+    selectedCompany, selectedFY, isPaired: wsIsPaired, pairing, demoMode: wsDemoMode, pairingStatus,
+    companies: wsCompanies,
+  } = useWorkspace();
+  const isPaired = typeof wsIsPaired === 'boolean' ? wsIsPaired : !!authIsPaired;
+  const connectionStatus = String(pairing?.status || pairingStatus || '').toUpperCase();
+  const demoMode = typeof wsDemoMode === 'boolean'
+    ? wsDemoMode
+    : (() => {
+      if (connectionStatus === 'CONNECTED') return false;
+      if (connectionStatus === 'UNPAIRED' || connectionStatus === 'RECONNECTING') return true;
+      // Status unknown — fail-closed Demo (do not use isPaired for live eligibility)
+      return true;
+    })();
+  const reconnecting = connectionStatus === 'RECONNECTING';
+  const connectedEmpty =
+    connectionStatus === 'CONNECTED' &&
+    Array.isArray(wsCompanies) &&
+    wsCompanies.filter((c) => {
+      const name = String(c?.name || '').toLowerCase();
+      const guid = String(c?.guid || c?.id || '');
+      return c?.is_active !== false
+        && !name.startsWith('demo')
+        && !guid.startsWith('dddddddd-dddd-4ddd-8ddd-');
+    }).length === 0;
   const { money, mc } = useFmt();
 
   const [metrics, setMetrics] = useState({ tiles: [] });
@@ -124,7 +150,13 @@ export default function Dashboard() {
       if (!soft) setLoading(true);
       return;
     }
-    if (!isPaired) {
+    // Demo Mode still loads KPIs from the Demo company — do not blank the dashboard.
+    const guid = selectedCompany?.guid;
+    const fyFrom = selectedFY?.startDate || selectedFY?.begin_date
+      || selectedCompany?.years?.[0]?.startDate || selectedCompany?.years?.[0]?.begin_date;
+    const fyTo = selectedFY?.endDate || selectedFY?.end_date
+      || selectedCompany?.years?.[0]?.endDate || selectedCompany?.years?.[0]?.end_date;
+    if (!guid || !fyFrom || !fyTo) {
       setMetrics({ tiles: [] });
       setChartData({ series: [], interval: null });
       setKpiStrip([]);
@@ -132,27 +164,19 @@ export default function Dashboard() {
       setRecent([]);
       setCashflow(null);
       setTopCustomers([]);
-      setLoading(false);
-      return;
-    }
-    if (!selectedCompany?.guid || !selectedFY?.startDate || !selectedFY?.endDate) {
-      setMetrics({ tiles: [] });
-      setChartData({ series: [], interval: null });
-      setKpiStrip([]);
-      setCostAnalysis({ total_raw: 0, heads: [] });
-      setRecent([]);
-      setCashflow(null);
-      setTopCustomers([]);
-      setError(lt('Select a company to load the dashboard.'));
+      setError(demoMode
+        ? lt('Demo Mode — waiting for Demo company. Try refresh or Settings → Tally Sync.')
+        : connectedEmpty
+          ? lt('No active Tally companies found. Check the company/FY selection in TallyDekho Desktop and sync again.')
+          : lt('Select a company to load the dashboard.'));
       setLoading(false);
       return;
     }
     const code = DASHBOARD_PERIOD_CODE[period] || '1M';
     const { from, to } = resolvePeriodDates(code, {
-      from: selectedFY.startDate,
-      to: selectedFY.endDate,
+      from: fyFrom,
+      to: fyTo,
     });
-    const guid = selectedCompany.guid;
     Promise.allSettled([
       api.loadMobileDashboard(guid, code, from, to),
       api.aggregateTopCustomersFromInvoices(guid, from, to),
@@ -231,6 +255,7 @@ export default function Dashboard() {
     selectedFY?.uniqueId,
     period,
     isPaired,
+    demoMode,
     authBootstrapping,
     syncVersion,
   ]);
@@ -598,12 +623,34 @@ export default function Dashboard() {
           <Button variant="secondary" className="ml-4" onClick={load}>{lt('Retry')}</Button>
         </div>
       )}
-      {/* Connection strip — only shown while Tally is NOT connected */}
-      {!isPaired && (
-        <div className="flex flex-wrap items-center gap-3 rounded-xl border border-line bg-surface px-5 py-3 shadow-sm">
+      {/* Demo Mode — real Tally data hidden until CONNECTED (UNPAIRED | RECONNECTING) */}
+      {demoMode && (
+        <div className="flex flex-wrap items-center gap-3 rounded-xl border border-warn/40 bg-warn-bg px-5 py-3 shadow-sm" data-testid="demo-mode-banner">
           <span className="h-2 w-2 rounded-sm bg-warn" />
-          <p className="min-w-0 flex-1 truncate text-sm font-semibold text-ink-soft">{lt('Connect Tally Prime to sync live data')}</p>
-          <Button onClick={() => navigate('/settings/tally-sync')}>{lt('Connect')}</Button>
+          <div className="min-w-0 flex-1">
+            <p className="text-sm font-bold text-ink">
+              {reconnecting ? lt('Paired · waiting for first sync') : lt('Demo Mode')}
+            </p>
+            <p className="text-[12px] text-ink-soft">
+              {reconnecting
+                ? lt('Desktop is paired. Live books stay hidden until the first sync completes.')
+                : lt('Showing sample Demo company data. Live Tally books stay hidden until you pair and sync.')}
+            </p>
+          </div>
+          {!reconnecting && (
+            <Button onClick={() => navigate('/settings/tally-sync')}>{lt('Connect')}</Button>
+          )}
+        </div>
+      )}
+      {connectedEmpty && !demoMode && (
+        <div className="flex flex-wrap items-center gap-3 rounded-xl border border-warn/40 bg-warn-bg px-5 py-3 shadow-sm" data-testid="connected-empty-banner">
+          <span className="h-2 w-2 rounded-sm bg-warn" />
+          <div className="min-w-0 flex-1">
+            <p className="text-sm font-bold text-ink">{lt('Connected · no active companies')}</p>
+            <p className="text-[12px] text-ink-soft">
+              {lt('No active Tally companies found. Check the company/FY selection in TallyDekho Desktop and sync again.')}
+            </p>
+          </div>
         </div>
       )}
 

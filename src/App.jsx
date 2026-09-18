@@ -6,8 +6,12 @@ import { SettingsProvider } from './contexts/SettingsContext';
 import { DrawerStackProvider } from './components/kit';
 import AppShell from './layouts/AppShell';
 import ModuleLayout, {
-  INVENTORY_SECTIONS, SETTINGS_SECTIONS, FINANCIALS_TABS, COMPLIANCE_TABS, AUDIT_TRAIL_TABS, PURCHASE_TABS, VOUCHER_TABS,
+  INVENTORY_SECTIONS, FINANCIALS_TABS, COMPLIANCE_TABS, AUDIT_TRAIL_TABS, PURCHASE_TABS, VOUCHER_TABS,
 } from './layouts/ModuleLayout';
+import SettingsLayout from './layouts/SettingsLayout';
+import RequireCapability from './components/RequireCapability';
+import { SETTINGS_ROUTE_GUARDS } from './config/settingsCapabilities';
+import { NAV_CAP } from './config/navCapabilities';
 
 import Login from './pages/auth/Login';
 import Dashboard from './pages/Dashboard';
@@ -23,10 +27,15 @@ import { SettingsTeamAccess } from './pages/settings/TeamAccess';
 import { SettingsBilling } from './pages/settings/Billing';
 import { SettingsWorkspaceLifecycle } from './pages/settings/WorkspaceLifecycle';
 import { SettingsPaymentModes } from './pages/settings/PaymentModes';
+import { SettingsInvitations } from './pages/settings/Invitations';
 import Onboarding from './pages/Onboarding';
 import DocumentViewer from './pages/DocumentViewer';
 import CashflowReport from './pages/CashflowReport';
 import { isOnboardingDone } from './utils/onboardingNav';
+
+function Cap({ anyOf, ownerOnly, children }) {
+  return <RequireCapability anyOf={anyOf} ownerOnly={ownerOnly}>{children}</RequireCapability>;
+}
 
 class ErrorBoundary extends Component {
   constructor(p) { super(p); this.state = { error: null }; }
@@ -95,10 +104,10 @@ export default function App() {
                 <Route path="/onboarding" element={<Protected><Onboarding /></Protected>} />
 
                 <Route path="/" element={<Protected><OnboardingGate><AppShell /></OnboardingGate></Protected>}>
-                  <Route index element={<Dashboard />} />
-                  <Route path="kpi/:key" element={<Dashboard />} />
+                  <Route index element={<Cap anyOf={[NAV_CAP.Dashboard]}><Dashboard /></Cap>} />
+                  <Route path="kpi/:key" element={<Cap anyOf={[NAV_CAP.Dashboard]}><Dashboard /></Cap>} />
 
-                  <Route path="sales" element={<S.SalesLayout />}>
+                  <Route path="sales" element={<Cap anyOf={[NAV_CAP.Sales]}><S.SalesLayout /></Cap>}>
                     <Route index element={<S.SalesInvoices />} />
                     <Route path="register" element={<S.SalesRegister />} />
                     <Route path="orders" element={<S.SalesOrders />} />
@@ -110,14 +119,14 @@ export default function App() {
                     <Route path="eway-bill" element={<S.SalesEwayBill />} />
                   </Route>
 
-                  <Route path="purchase" element={<ModuleLayout title="Purchase" tabs={PURCHASE_TABS} Kpis={P.PurchaseKpis} />}>
+                  <Route path="purchase" element={<Cap anyOf={[NAV_CAP.Purchase]}><ModuleLayout title="Purchase" tabs={PURCHASE_TABS} Kpis={P.PurchaseKpis} /></Cap>}>
                     <Route index element={<P.PurchaseInvoices />} />
                     <Route path="register" element={<P.PurchaseRegister />} />
                     <Route path="orders" element={<P.PurchaseOrders />} />
                     <Route path="debit-notes" element={<P.DebitNotes />} />
                   </Route>
 
-                  <Route path="vouchers" element={<ModuleLayout title="Vouchers" tabs={VOUCHER_TABS} Kpis={V.VoucherKpis} />}>
+                  <Route path="vouchers" element={<Cap anyOf={[NAV_CAP.Vouchers]}><ModuleLayout title="Vouchers" tabs={VOUCHER_TABS} Kpis={V.VoucherKpis} /></Cap>}>
                     <Route index element={<V.AllVouchers />} />
                     <Route path="payment" element={<V.PaymentVouchers />} />
                     <Route path="receipt" element={<V.ReceiptVouchers />} />
@@ -125,7 +134,7 @@ export default function App() {
                     <Route path="contra" element={<V.ContraVouchers />} />
                   </Route>
 
-                  <Route path="inventory" element={<ModuleLayout title="Inventory" sections={INVENTORY_SECTIONS} />}>
+                  <Route path="inventory" element={<Cap anyOf={[NAV_CAP.Inventory]}><ModuleLayout title="Inventory" sections={INVENTORY_SECTIONS} /></Cap>}>
                     <Route index element={<I.InventoryOverview />} />
                     <Route path="items" element={<I.StockItems />} />
                     <Route path="items/:id" element={<I.StockItems />} />
@@ -152,7 +161,7 @@ export default function App() {
                     <Route path="settings" element={<I.StockSettings />} />
                   </Route>
 
-                  <Route path="financials" element={<ModuleLayout title="Financials" tabs={FINANCIALS_TABS} Kpis={F.FinancialsKpis} />}>
+                  <Route path="financials" element={<Cap anyOf={[NAV_CAP.Financials]}><ModuleLayout title="Financials" tabs={FINANCIALS_TABS} Kpis={F.FinancialsKpis} /></Cap>}>
                     <Route index element={<Navigate to="/financials/overview" replace />} />
                     <Route path="overview" element={<F.FinancialOverview />} />
                     <Route path="profit-loss" element={<F.ProfitLoss />} />
@@ -167,10 +176,10 @@ export default function App() {
                   </Route>
 
                   {/* Top-level — DoneState uses /document/:id; cashflow links use /cashflow-report */}
-                  <Route path="document/:id" element={<DocumentViewer />} />
-                  <Route path="cashflow-report" element={<CashflowReport />} />
+                  <Route path="document/:id" element={<Cap anyOf={[NAV_CAP.Sales, NAV_CAP.Purchase, NAV_CAP.Vouchers]}><DocumentViewer /></Cap>} />
+                  <Route path="cashflow-report" element={<Cap anyOf={[NAV_CAP.Financials]}><CashflowReport /></Cap>} />
 
-                  <Route path="compliance" element={<ModuleLayout title="Compliance" tabs={COMPLIANCE_TABS} Kpis={C.ComplianceKpis} />}>
+                  <Route path="compliance" element={<Cap anyOf={[NAV_CAP.Compliance]}><ModuleLayout title="Compliance" tabs={COMPLIANCE_TABS} Kpis={C.ComplianceKpis} /></Cap>}>
                     <Route index element={<Navigate to="/compliance/gst" replace />} />
                     <Route path="gst" element={<C.GST />} />
                     <Route path="alerts" element={<C.ComplianceAlerts />} />
@@ -182,16 +191,16 @@ export default function App() {
                     <Route path="eway-bill-coverage" element={<C.EWayBillCoverage />} />
                   </Route>
 
-                  <Route path="audit-trail" element={<ModuleLayout title="Audit Trail" tabs={AUDIT_TRAIL_TABS} testid="audit-trail-module" />}>
+                  <Route path="audit-trail" element={<Cap anyOf={[NAV_CAP['Audit Trail']]}><ModuleLayout title="Audit Trail" tabs={AUDIT_TRAIL_TABS} testid="audit-trail-module" /></Cap>}>
                     <Route index element={<M.AuditTrail />} />
                     <Route path="daybook" element={<M.DayBook />} />
                   </Route>
 
-                  <Route path="expenses" element={<M.Expenses />} />
-                  <Route path="payments" element={<M.PaymentsReceipts />} />
-                  <Route path="parties" element={<M.Parties />} />
-                  <Route path="ledgers" element={<M.Ledgers />} />
-                  <Route path="ai-insights" element={<M.AIInsights />} />
+                  <Route path="expenses" element={<Cap anyOf={[NAV_CAP.Expenses]}><M.Expenses /></Cap>} />
+                  <Route path="payments" element={<Cap anyOf={[NAV_CAP.Vouchers]}><M.PaymentsReceipts /></Cap>} />
+                  <Route path="parties" element={<Cap anyOf={[NAV_CAP.Ledgers]}><M.Parties /></Cap>} />
+                  <Route path="ledgers" element={<Cap anyOf={[NAV_CAP.Ledgers]}><M.Ledgers /></Cap>} />
+                  <Route path="ai-insights" element={<Cap anyOf={[NAV_CAP['AI Insights']]}><M.AIInsights /></Cap>} />
 
                   <Route path="notifications" element={<Navigate to="/" replace />} />
                   <Route path="daybook" element={<Navigate to="/audit-trail/daybook" replace />} />
@@ -201,14 +210,15 @@ export default function App() {
                   <Route path="parties/:id" element={<Navigate to="/parties" replace />} />
                   <Route path="ledgers/:id" element={<Navigate to="/ledgers" replace />} />
 
-                  <Route path="settings" element={<ModuleLayout title="Settings" sections={SETTINGS_SECTIONS} testid="settings-module" />}>
+                  <Route path="settings" element={<SettingsLayout />}>
                     <Route index element={<Navigate to="/settings/profile" replace />} />
                     <Route path="profile" element={<G.SettingsProfile />} />
                     <Route path="company" element={<G.SettingsCompany />} />
-                    <Route path="team" element={<SettingsTeamAccess />} />
-                    <Route path="billing" element={<SettingsBilling />} />
-                    <Route path="payment-modes" element={<SettingsPaymentModes />} />
-                    <Route path="workspace-lifecycle" element={<SettingsWorkspaceLifecycle />} />
+                    <Route path="team" element={<RequireCapability anyOf={SETTINGS_ROUTE_GUARDS['/settings/team']}><SettingsTeamAccess /></RequireCapability>} />
+                    <Route path="billing" element={<RequireCapability ownerOnly={SETTINGS_ROUTE_GUARDS['/settings/billing']?.ownerOnly}><SettingsBilling /></RequireCapability>} />
+                    <Route path="payment-modes" element={<RequireCapability anyOf={SETTINGS_ROUTE_GUARDS['/settings/payment-modes'] || ['workspace.settings.manage']}><SettingsPaymentModes /></RequireCapability>} />
+                    <Route path="workspace-lifecycle" element={<RequireCapability ownerOnly={SETTINGS_ROUTE_GUARDS['/settings/workspace-lifecycle']?.ownerOnly}><SettingsWorkspaceLifecycle /></RequireCapability>} />
+                    <Route path="invitations" element={<SettingsInvitations />} />
                     <Route path="license" element={<G.SettingsLicense />} />
                     <Route path="tally-sync" element={<G.SettingsTallySync />} />
                     <Route path="bank-feeds" element={<G.SettingsBankFeeds />} />
@@ -221,8 +231,8 @@ export default function App() {
                     <Route path="compliance-reminders" element={<G.SettingsComplianceReminders />} />
                     <Route path="stock-alerts" element={<G.SettingsStockAlerts />} />
                     <Route path="voucher-config" element={<G.SettingsVoucherConfig />} />
-                    <Route path="einvoice" element={<G.SettingsEInvoice />} />
-                    <Route path="ewb" element={<G.SettingsEWB />} />
+                    <Route path="einvoice" element={<RequireCapability anyOf={SETTINGS_ROUTE_GUARDS['/settings/einvoice']}><G.SettingsEInvoice /></RequireCapability>} />
+                    <Route path="ewb" element={<RequireCapability anyOf={SETTINGS_ROUTE_GUARDS['/settings/ewb']}><G.SettingsEWB /></RequireCapability>} />
                     <Route path="barcodes" element={<G.SettingsBarcodes />} />
                     <Route path="help" element={<G.SettingsHelp />} />
                     <Route path="about" element={<G.SettingsAbout />} />

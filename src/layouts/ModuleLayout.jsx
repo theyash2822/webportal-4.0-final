@@ -51,12 +51,18 @@ export const SETTINGS_SECTIONS = [
     label: 'Account',
     items: [
       { label: 'Profile', to: '/settings/profile' },
+      { label: 'License', to: '/settings/license' },
+    ],
+  },
+  {
+    label: 'Workspace',
+    items: [
       { label: 'Company', to: '/settings/company' },
       { label: 'Team & Access', to: '/settings/team' },
+      { label: 'Invitations', to: '/settings/invitations' },
       { label: 'Billing & Credits', to: '/settings/billing' },
       { label: 'Payment modes', to: '/settings/payment-modes' },
       { label: 'Workspace lifecycle', to: '/settings/workspace-lifecycle' },
-      { label: 'License', to: '/settings/license' },
     ],
   },
   {

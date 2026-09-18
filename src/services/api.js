@@ -95,20 +95,29 @@ async function apiGet(path, opts = {}) {
 
 async function apiRequest(method, path, body = null, opts = {}) {
   const { skipAuth = false, bearer } = opts;
-  const headers = { 'Content-Type': 'application/json' };
+  const headers = {};
+  const hasBody = body !== undefined && body !== null;
+  if (hasBody) headers['Content-Type'] = 'application/json';
   const token = bearer || (!skipAuth ? getToken() : null);
   if (token) headers['Authorization'] = `Bearer ${token}`;
   attachWorkspaceHeader(headers, opts);
   const res = await fetch(`${API_ROOT}${path}`, {
     method,
     headers,
-    body: body === undefined || body === null ? undefined : JSON.stringify(body),
+    body: hasBody ? JSON.stringify(body) : undefined,
   });
   if (!res.ok) {
     const e = await res.json().catch(() => ({}));
     throwHttpError(res, e);
   }
-  return res.json();
+  // 204 / empty
+  const text = await res.text();
+  if (!text) return { success: true };
+  try {
+    return JSON.parse(text);
+  } catch {
+    return { success: true };
+  }
 }
 
 /** Normalize mobile `/api/auth/*` envelopes (also accepts legacy /app field names). */
@@ -228,13 +237,7 @@ function readParams(body = {}) {
   };
 }
 
-/** Legacy POST /app/vouchers — internal fallback only */
-async function vouchersLegacyPost(body) {
-  const res = await post('/vouchers', body);
-  const list = res?.data?.vouchers || res?.data || [];
-  return { success: true, data: Array.isArray(list) ? list : unwrapList(res), meta: res?.meta };
-}
-
+/** Legacy POST /app/vouchers fallback removed in Phase 5 — canonical GET /api only */
 async function fetchRegisterOrVouchers(apiPath, companyGuid, params, voucherType) {
   const apiParams = {
     from: params?.from || params?.fromDate,
@@ -246,24 +249,9 @@ async function fetchRegisterOrVouchers(apiPath, companyGuid, params, voucherType
     is_optional: params?.is_optional,
     docTypes: params?.docTypes,
   };
-  try {
-    const res = await apiGet(withCompany(apiPath, companyGuid, apiParams));
-    const items = unwrapList(res);
-    if (items.length > 0 || res?.success !== false) {
-      return { success: true, data: items, meta: res?.meta };
-    }
-  } catch {
-    // fall through to legacy vouchers POST
-  }
-  return vouchersLegacyPost({
-    companyGuid,
-    voucherType,
-    page: params?.page || 1,
-    pageSize: params?.pageSize || params?.limit || 100,
-    searchText: params?.search || params?.searchText,
-    fromDate: params?.fromDate || params?.from,
-    toDate: params?.toDate || params?.to,
-  });
+  const res = await apiGet(withCompany(apiPath, companyGuid, apiParams));
+  const items = unwrapList(res);
+  return { success: true, data: items, meta: res?.meta };
 }
 
 // ─── Auth (same /api/auth/* as mobile V4) ────────────────────────────────────
@@ -364,7 +352,7 @@ export async function resolveActiveCompanyGuid(bearer) {
   }
 }
 
-/** Companies list + FY years for the selected (or active synced) company — mirrors mobile. */
+/** Companies list + FY years for the company that is actually in the list. */
 export async function fetchCompaniesHydrated({ bearer, forGuid } = {}) {
   const res = await fetchCompaniesList({ bearer });
   const companies = normalizeApiCompanies(res);
@@ -379,16 +367,34 @@ export async function fetchCompaniesHydrated({ bearer, forGuid } = {}) {
   }
   targetGuid = targetGuid || companies[0].guid;
 
-  const yearsRes = await fetchCompanyYears(targetGuid, { bearer });
-  const years = normalizeCompanyYears(targetGuid, yearsRes);
+  let years = [];
+  try {
+    const yearsRes = await fetchCompanyYears(targetGuid, { bearer });
+    years = normalizeCompanyYears(targetGuid, yearsRes);
+  } catch (err) {
+    console.warn('fetchCompanyYears failed:', err?.message || err);
+  }
   return companies.map(c => (c.guid === targetGuid ? { ...c, years } : c));
 }
 
 // ─── Pairing (same /api/tally-sync/* as mobile) ──────────────────────────────
 export const fetchTallySyncStatus = () => apiGet('/api/tally-sync/status');
-export const pairWithTally = (pairingCode) =>
-  apiRequest('POST', '/api/tally-sync/pair', { pairing_code: String(pairingCode || '').trim() });
-export const unpairTally = () => apiRequest('POST', '/api/tally-sync/unpair', {});
+/** @deprecated Use pairWorkspaceTally — legacy route returns 410. */
+export const pairWithTally = () =>
+  Promise.reject(Object.assign(new Error('Use pairWorkspaceTally(workspaceId, code)'), {
+    code: 'PAIRING_API_DEPRECATED',
+  }));
+/** @deprecated Use unpairWorkspaceTally — legacy route returns 410. */
+export const unpairTally = () =>
+  Promise.reject(Object.assign(new Error('Use unpairWorkspaceTally(workspaceId)'), {
+    code: 'PAIRING_API_DEPRECATED',
+  }));
+export const pairWorkspaceTally = (workspaceId, pairingCode) =>
+  apiRequest('POST', `/api/workspaces/${encodeURIComponent(workspaceId)}/tally/pair`, {
+    pairing_code: String(pairingCode || '').trim(),
+  });
+export const unpairWorkspaceTally = (workspaceId) =>
+  apiRequest('POST', `/api/workspaces/${encodeURIComponent(workspaceId)}/tally/unpair`, {});
 export const fetchWorkspaceApprovals = () => apiGet('/api/workspace/approvals');
 export const approveHardSync = (id) => apiRequest('POST', `/api/workspace/hard-sync/${id}/approve`, {});
 export const rejectHardSync = (id) => apiRequest('POST', `/api/workspace/hard-sync/${id}/reject`, {});
@@ -414,7 +420,7 @@ export const patchWorkspaceRole = (workspaceId, roleId, body) =>
 export const createWorkspaceRole = (workspaceId, body) =>
   apiRequest('POST', `/api/workspaces/${encodeURIComponent(workspaceId)}/roles`, body);
 export const deleteWorkspaceRole = (workspaceId, roleId) =>
-  apiRequest('DELETE', `/api/workspaces/${encodeURIComponent(workspaceId)}/roles/${encodeURIComponent(roleId)}`, {});
+  apiRequest('DELETE', `/api/workspaces/${encodeURIComponent(workspaceId)}/roles/${encodeURIComponent(roleId)}`, null);
 export const fetchMemberScopes = (workspaceId, membershipId) =>
   apiGet(`/api/workspaces/${encodeURIComponent(workspaceId)}/members/${encodeURIComponent(membershipId)}/scopes`);
 export const putMemberScopes = (workspaceId, membershipId, body) =>
@@ -422,6 +428,10 @@ export const putMemberScopes = (workspaceId, membershipId, body) =>
 export const createWorkspaceInvitation = (workspaceId, body) =>
   apiRequest('POST', `/api/workspaces/${encodeURIComponent(workspaceId)}/invitations`, body);
 export const fetchMyInvitations = () => apiGet('/api/me/invitations', { skipWorkspace: true });
+export const fetchWorkspaceInvitations = (workspaceId) =>
+  apiGet(`/api/workspaces/${encodeURIComponent(workspaceId)}/invitations`);
+export const revokeWorkspaceInvitation = (workspaceId, invitationId) =>
+  apiRequest('POST', `/api/workspaces/${encodeURIComponent(workspaceId)}/invitations/${encodeURIComponent(invitationId)}/revoke`, {});
 export const acceptInvitation = (id) => apiRequest('POST', `/api/invitations/${encodeURIComponent(id)}/accept`, {});
 export const declineInvitation = (id) => apiRequest('POST', `/api/invitations/${encodeURIComponent(id)}/decline`, {});
 export const suspendWorkspaceMember = (workspaceId, userId) =>
@@ -429,7 +439,7 @@ export const suspendWorkspaceMember = (workspaceId, userId) =>
 export const unsuspendWorkspaceMember = (workspaceId, userId) =>
   apiRequest('POST', `/api/workspaces/${encodeURIComponent(workspaceId)}/members/${encodeURIComponent(userId)}/unsuspend`, {});
 export const removeWorkspaceMember = (workspaceId, userId) =>
-  apiRequest('DELETE', `/api/workspaces/${encodeURIComponent(workspaceId)}/members/${encodeURIComponent(userId)}`, {});
+  apiRequest('DELETE', `/api/workspaces/${encodeURIComponent(workspaceId)}/members/${encodeURIComponent(userId)}`, null);
 export const fetchWorkspaceAudit = (workspaceId) =>
   apiGet(`/api/workspaces/${encodeURIComponent(workspaceId)}/audit`);
 export const fetchBillingOverview = () => apiGet('/api/billing/overview');
@@ -448,6 +458,26 @@ export const createBillingPaymentOrder = (body) =>
   apiRequest('POST', '/api/billing/payment-orders', body);
 export const completeBillingPaymentOrder = (orderId) =>
   apiRequest('POST', `/api/billing/payment-orders/${encodeURIComponent(orderId)}/complete`, {});
+/** Razorpay Checkout create — POST /api/billing/recharge/create */
+export const createBillingRechargeOrder = (body) =>
+  apiRequest('POST', '/api/billing/recharge/create', body);
+export const verifyBillingRecharge = (body) =>
+  apiRequest('POST', '/api/billing/recharge/verify', body);
+export const fetchBillingRechargeStatus = () =>
+  apiGet('/api/billing/recharge/status');
+/** Workspace GST / E-Invoice / E-Way integrations */
+export const getWorkspaceIntegration = (workspaceId, domain) =>
+  apiGet(`/api/workspaces/${encodeURIComponent(workspaceId)}/integrations/${encodeURIComponent(domain)}`);
+export const saveWorkspaceIntegration = (workspaceId, domain, body) =>
+  apiRequest('POST', `/api/workspaces/${encodeURIComponent(workspaceId)}/integrations/${encodeURIComponent(domain)}`, body);
+export const putWorkspaceIntegration = (workspaceId, domain, body) =>
+  apiRequest('PUT', `/api/workspaces/${encodeURIComponent(workspaceId)}/integrations/${encodeURIComponent(domain)}`, body);
+export const activateWorkspaceIntegration = (workspaceId, domain, body = {}) =>
+  apiRequest(
+    'POST',
+    `/api/workspaces/${encodeURIComponent(workspaceId)}/integrations/${encodeURIComponent(domain)}/activate`,
+    body
+  );
 export const fetchWorkspaceSeats = (workspaceId) =>
   apiGet(`/api/workspaces/${encodeURIComponent(workspaceId)}/seats`);
 export const purchaseWorkspaceSeat = (workspaceId) =>
@@ -555,8 +585,9 @@ export const fetchVoucherDetail = async (body = {}) => {
 };
 
 // ─── Stocks (GET /api/stocks/* — same as mobile) ─────────────────────────────
-/** Same as mobile getStockDashboard — still served on /app/stock-dashboard */
-export const fetchStockSummary = (companyGuid) => post('/stock-dashboard', { companyGuid });
+/** Same as mobile getStockDashboard — GET /api/stocks/dashboard */
+export const fetchStockSummary = (companyGuid) =>
+  apiGet(withCompany('/api/stocks/dashboard', companyGuid));
 
 export const fetchStockFilters = async (companyGuid) => {
   const [groupsRes, whRes] = await Promise.all([
@@ -620,20 +651,16 @@ export const fetchVouchers = async (body = {}) => {
   const p = readParams(body);
   const typeKey = body.voucherType || body.type;
   const type = VOUCHER_TYPE_QUERY[typeKey] || (typeKey ? String(typeKey).toLowerCase() : undefined);
-  try {
-    const res = await apiGet(withCompany('/api/vouchers', p.companyGuid, {
-      search: p.search,
-      page: p.page,
-      limit: p.limit,
-      from: p.from,
-      to: p.to,
-      ...(type ? { type } : {}),
-    }));
-    const items = unwrapList(res);
-    return { success: true, data: items, meta: res?.meta };
-  } catch {
-    return vouchersLegacyPost(body);
-  }
+  const res = await apiGet(withCompany('/api/vouchers', p.companyGuid, {
+    search: p.search,
+    page: p.page,
+    limit: p.limit,
+    from: p.from,
+    to: p.to,
+    ...(type ? { type } : {}),
+  }));
+  const items = unwrapList(res);
+  return { success: true, data: items, meta: res?.meta };
 };
 
 export const fetchDaybook = (companyGuid, params = {}) =>
@@ -645,7 +672,7 @@ export const fetchDaybook = (companyGuid, params = {}) =>
     limit: params.limit || params.pageSize || 500,
   }));
 
-// Register helpers — GET /api/* first, fallback to POST /vouchers
+// Register helpers — GET /api/* only (Phase 5: no /app/vouchers fallback)
 export const fetchSalesInvoices = (companyGuid, params = {}) =>
   fetchRegisterOrVouchers('/api/sales/invoices', companyGuid, params, 'Sales');
 export const fetchSalesOrders = (companyGuid, params = {}) =>
@@ -1060,7 +1087,8 @@ export const fetchStockAdjustments = (companyGuid, params = {}) =>
 
 export const fetchVoucherFull = (companyGuid, voucherId) =>
   apiGet(`/api/vouchers/${encodeURIComponent(voucherId)}?companyGuid=${encodeURIComponent(companyGuid)}`);
-export const fetchPrintProfile = (companyGuid) => get(`/companies/${companyGuid}/print-profile`);
+export const fetchPrintProfile = (companyGuid) =>
+  apiGet(`/api/companies/${encodeURIComponent(companyGuid)}/print-profile`);
 
 // ─── FY params (mobile parity — see tallydekho-mobile-V4 AuthContext fyInfoToParam) ──
 
@@ -1458,16 +1486,20 @@ const api = {
   sendOtp, verifyOtp, registerUser, verifyPin, resetPin, fetchMe, fetchMeWithToken, fetchCompaniesList, fetchCompanyYears, fetchCompaniesHydrated, normalizeApiCompanies, normalizeCompanyYears, updateMe, unwrapAuth,
   logoutApi, changePhone, changeEmail, registerPushToken, removePushToken,
   // Pairing
-  pairWithTally, fetchTallySyncStatus, unpairTally,
+  pairWithTally, fetchTallySyncStatus, unpairTally, pairWorkspaceTally, unpairWorkspaceTally,
   fetchWorkspaceApprovals, approveHardSync, rejectHardSync, approveWorkspaceRestore,
   fetchMyWorkspaces, fetchWorkspaceContext, patchWorkspace, createWorkspace,
   fetchWorkspaceMembers, fetchWorkspaceRoles, fetchCapabilityRegistry,
   fetchWorkspaceRole, patchWorkspaceRole, createWorkspaceRole, deleteWorkspaceRole,
   fetchMemberScopes, putMemberScopes, createWorkspaceInvitation, fetchMyInvitations,
+  fetchWorkspaceInvitations, revokeWorkspaceInvitation,
   acceptInvitation, declineInvitation, suspendWorkspaceMember, unsuspendWorkspaceMember,
+  removeWorkspaceMember,
   fetchWorkspaceAudit, fetchBillingOverview, fetchBillingRates,
   fetchBillingTransactions, fetchBillingUsage, fetchBillingInvoices,
   fetchBillingPaymentOrders, createBillingPaymentOrder, completeBillingPaymentOrder,
+  createBillingRechargeOrder, verifyBillingRecharge, fetchBillingRechargeStatus,
+  getWorkspaceIntegration, saveWorkspaceIntegration, putWorkspaceIntegration, activateWorkspaceIntegration,
   fetchWorkspaceSeats, purchaseWorkspaceSeat, getWorkspaceId, setWorkspaceId,
   patchWorkspaceMemberRole, initiateWorkspaceTransfer, fetchWorkspaceTransfer,
   confirmWorkspaceTransfer, completeWorkspaceTransfer, revokeWorkspaceTransfer,

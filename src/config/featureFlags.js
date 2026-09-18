@@ -5,7 +5,6 @@
 export const FEATURE_FLAGS = {
   workspace_model_enabled: true,
   workspace_header_required: true,
-  rbas_enabled: true,
   member_invites_enabled: true,
   scope_company_enabled: true,
   scope_fy_enabled: true,

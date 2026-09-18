@@ -1,17 +1,35 @@
-/** Local draft auto-save for create forms (mobile AsyncStorage parity, 30 min TTL). */
+/** Local draft auto-save for create forms (mobile AsyncStorage parity, 30 min TTL).
+ * Phase 3: workspace-scoped keys — same tallyGuid must not collide across workspaces.
+ */
 const TTL_MS = 30 * 60 * 1000;
 
-export function draftKey(prefix, companyGuid) {
+export function draftKey(prefix, companyGuid, workspaceId = null) {
+  const g = companyGuid || 'none';
+  if (workspaceId) return `td_draft_${workspaceId}_${prefix}_${g}`;
+  return `td_draft_${prefix}_${g}`;
+}
+
+function legacyDraftKey(prefix, companyGuid) {
   return `td_draft_${prefix}_${companyGuid || 'none'}`;
 }
 
-export function loadDraft(prefix, companyGuid) {
+export function loadDraft(prefix, companyGuid, workspaceId = null) {
   try {
-    const raw = localStorage.getItem(draftKey(prefix, companyGuid));
+    const key = draftKey(prefix, companyGuid, workspaceId);
+    let raw = localStorage.getItem(key);
+    // One-time migrate from pre-Phase-3 global key (preserve user drafts)
+    if (!raw && workspaceId && companyGuid) {
+      const legacy = legacyDraftKey(prefix, companyGuid);
+      raw = localStorage.getItem(legacy);
+      if (raw) {
+        localStorage.setItem(key, raw);
+        localStorage.removeItem(legacy);
+      }
+    }
     if (!raw) return null;
     const d = JSON.parse(raw);
     if (!d?.savedAt || Date.now() - d.savedAt > TTL_MS) {
-      localStorage.removeItem(draftKey(prefix, companyGuid));
+      localStorage.removeItem(key);
       return null;
     }
     return d;
@@ -20,13 +38,17 @@ export function loadDraft(prefix, companyGuid) {
   }
 }
 
-export function saveDraft(prefix, companyGuid, payload) {
+export function saveDraft(prefix, companyGuid, payload, workspaceId = null) {
   if (!companyGuid) return;
   try {
-    localStorage.setItem(draftKey(prefix, companyGuid), JSON.stringify({ ...payload, savedAt: Date.now() }));
+    localStorage.setItem(
+      draftKey(prefix, companyGuid, workspaceId),
+      JSON.stringify({ ...payload, savedAt: Date.now() })
+    );
   } catch { /* quota */ }
 }
 
-export function clearDraft(prefix, companyGuid) {
-  localStorage.removeItem(draftKey(prefix, companyGuid));
+export function clearDraft(prefix, companyGuid, workspaceId = null) {
+  localStorage.removeItem(draftKey(prefix, companyGuid, workspaceId));
+  if (workspaceId) localStorage.removeItem(legacyDraftKey(prefix, companyGuid));
 }

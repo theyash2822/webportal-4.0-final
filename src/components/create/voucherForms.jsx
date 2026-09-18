@@ -2,6 +2,7 @@ import { useEffect, useMemo, useState, useRef } from 'react';
 import { Field, Input, Select, Button, useLabelT } from '../kit';
 import api from '../../services/api';
 import { useAuth } from '../../contexts/AuthContext';
+import { useWorkspace } from '../../contexts/WorkspaceContext';
 import {
   num, todayISO, useCreateData, SearchSelect, FormSection,
   EntryTypeToggle, ToggleRow, LineItemsEditor, emptyLine, lineAmount,
@@ -146,6 +147,7 @@ function CommercialForm({ mode, onClose, onCreated, prefill, onViewDocument }) {
     'taxLedgers', 'chargeLedgers', ...(order || proforma ? [] : ['banks']),
   ]);
   const { selectedFY } = useAuth();
+  const { currentWorkspace } = useWorkspace();
   const submit = useSubmit();
   const [date, setDate] = useState((prefill?.date || '').slice(0, 10) || todayISO());
   const [party, setParty] = useState(prefill?.party || '');
@@ -182,7 +184,7 @@ function CommercialForm({ mode, onClose, onCreated, prefill, onViewDocument }) {
 
   useEffect(() => {
     if (!company?.guid || !DRAFT_MODES.has(mode) || draftLoaded.current || prefill) return;
-    const saved = loadDraft(prefix, company.guid);
+    const saved = loadDraft(prefix, company.guid, currentWorkspace?.id);
     if (!saved) return;
     setDraftBanner(saved);
   }, [company?.guid, mode, prefix, prefill]);
@@ -198,7 +200,7 @@ function CommercialForm({ mode, onClose, onCreated, prefill, onViewDocument }) {
         date, party, ledger, entryType, reference, againstOrderNo, dueDate, paymentTerms, customDays,
         narration, termsText, lines, taxes, charges, roundOffLedger, roundOffAmount, showDispatch, dispatch,
         ewayRequired, vendorInvoiceNo, vendorInvoiceDate, purchaseRefNo,
-      });
+      }, currentWorkspace?.id);
     }, 800);
     return () => clearTimeout(t);
   }, [
@@ -236,7 +238,7 @@ function CommercialForm({ mode, onClose, onCreated, prefill, onViewDocument }) {
   };
 
   const discardDraft = () => {
-    if (company?.guid) clearDraft(prefix, company.guid);
+    if (company?.guid) clearDraft(prefix, company.guid, currentWorkspace?.id);
     setDraftBanner(null);
   };
 
@@ -396,7 +398,7 @@ function CommercialForm({ mode, onClose, onCreated, prefill, onViewDocument }) {
     }
     const result = await submit.run(() => fn(body));
     if (result) {
-      if (company?.guid) clearDraft(prefix, company.guid);
+      if (company?.guid) clearDraft(prefix, company.guid, currentWorkspace?.id);
       onCreated?.();
     }
   };
@@ -633,6 +635,7 @@ function ReturnNoteForm({ type, onClose, onCreated, onViewDocument }) {
   const prefix = credit ? 'cn' : 'dn';
   const ledgerKey = credit ? 'salesLedger' : 'purchaseLedger';
   const { selectedFY } = useAuth();
+  const { currentWorkspace } = useWorkspace();
   const fyStart = selectedFY?.startDate || `${new Date().getFullYear()}-04-01`;
   const fyEnd = selectedFY?.endDate || `${new Date().getFullYear() + 1}-03-31`;
   const { loading, error: loadError, opt, company, retry } = useCreateData([
@@ -824,6 +827,7 @@ export function DeliveryNoteForm({ onClose, onCreated, onViewDocument }) {
   const lt = useLabelT();
   const prefix = 'dn-delivery';
   const { selectedFY } = useAuth();
+  const { currentWorkspace } = useWorkspace();
   const { loading, error: loadError, opt, company, retry } = useCreateData([
     'parties', 'items', 'warehouses', 'salesLedgers', 'taxLedgers', 'chargeLedgers',
   ]);

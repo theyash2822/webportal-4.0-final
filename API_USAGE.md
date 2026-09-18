@@ -68,14 +68,23 @@ Stock group/item pickers use existing `fetchStockGroups` + `fetchStocks` (`/api/
 | fetchCapabilityRegistry | GET | /api/capabilities/registry |
 | createWorkspaceInvitation | POST | /api/workspaces/:id/invitations |
 | fetchMyInvitations | GET | /api/me/invitations |
+| fetchWorkspaceInvitations | GET | /api/workspaces/:id/invitations (PENDING sent) |
+| revokeWorkspaceInvitation | POST | /api/workspaces/:id/invitations/:inviteId/revoke |
 | acceptInvitation / declineInvitation | POST | /api/invitations/:id/accept\|decline |
+| _(UI)_ Settings → Workspace → Invitations | — | Received + Sent (pending); toasts on accept/decline/revoke |
 | suspend/unsuspend/remove member | POST/DELETE | /api/workspaces/:id/members/:userId/... |
-| fetchWorkspaceAudit | GET | /api/workspaces/:id/audit |
+| fetchWorkspaceAudit | GET | /api/workspaces/:id/audit (`event_type`, actor_name; `workspace.entered` on context) |
 | fetchBillingOverview / fetchBillingRates | GET | /api/billing/overview , /api/billing/rates |
 | fetchBillingTransactions / fetchBillingUsage | GET | /api/billing/transactions , /api/billing/usage |
 | fetchBillingInvoices | GET | /api/billing/invoices |
 | fetchBillingPaymentOrders / createBillingPaymentOrder | GET/POST | /api/billing/payment-orders |
 | completeBillingPaymentOrder | POST | /api/billing/payment-orders/:id/complete |
+| createBillingRechargeOrder | POST | /api/billing/recharge/create `{ credits, workspaceId? }` → Razorpay order + key_id |
+| verifyBillingRecharge | POST | /api/billing/recharge/verify `{ razorpay_order_id, razorpay_payment_id, razorpay_signature }` |
+| fetchBillingRechargeStatus | GET | /api/billing/recharge/status `{ configured, provider }` |
+| getWorkspaceIntegration | GET | /api/workspaces/:id/integrations/:domain (`gst`\|`einvoice`\|`eway`) |
+| saveWorkspaceIntegration / putWorkspaceIntegration | POST/PUT | /api/workspaces/:id/integrations/:domain (config) |
+| activateWorkspaceIntegration | POST | /api/workspaces/:id/integrations/:domain/activate (charges wallet) |
 | fetchWorkspaceSeats / purchaseWorkspaceSeat | GET/POST | /api/workspaces/:id/seats |
 | patchWorkspaceMemberRole | PATCH | /api/workspaces/:id/members/:userId/role |
 | initiateWorkspaceTransfer | POST | /api/workspaces/:id/transfer/initiate |

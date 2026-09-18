@@ -4,7 +4,7 @@ import {
   LayoutDashboard, TrendingUp, ShoppingCart, Package, Receipt,
   Landmark, ArrowLeftRight, FileBarChart2, ShieldCheck, Truck, FileText, ClipboardList,
   BookOpen, Sparkles, Bell, Settings as SettingsIcon, ChevronDown, ChevronRight, Menu, X,
-  Search, Plus, Check, Wallet, LogOut, User, CornerDownLeft, PanelLeftClose, PanelLeft, Zap, Unplug,
+  Search, Plus, Check, Wallet, LogOut, User, CornerDownLeft, PanelLeftClose, PanelLeft, Zap, Unplug, Pencil,
 } from 'lucide-react';
 import { useAuth } from '../contexts/AuthContext';
 import { useWorkspace } from '../contexts/WorkspaceContext';
@@ -15,6 +15,7 @@ import NotificationDrawer from '../components/NotificationDrawer';
 import OfflineBadge from '../components/OfflineBadge';
 import api from '../services/api';
 import { useTranslation } from 'react-i18next';
+import { NAV_CAP, capabilityForPath } from '../config/navCapabilities';
 
 // Portal nav labels → shared mobile translation keys (untranslated labels stay English).
 const NAV_I18N = {
@@ -71,20 +72,6 @@ const CREATE_MENU = [
   ] },
 ];
 
-const NAV_CAP = {
-  Dashboard: 'dashboard.view',
-  Sales: 'sales.view',
-  Purchase: 'purchase.view',
-  Vouchers: 'vouchers.view',
-  Inventory: 'inventory.view',
-  Expenses: 'expenses.view',
-  Financials: 'financials.view',
-  Compliance: 'compliance.view',
-  Ledgers: 'ledgers.view',
-  'Audit Trail': 'audit_trail.view',
-  'AI Insights': 'ai_insights.view',
-};
-
 const SEARCH_TARGETS = NAV.flatMap(g => g.items).concat([
   { label: 'Stock Items', to: '/inventory/items' }, { label: 'Warehouses', to: '/inventory/warehouses' },
   { label: 'Stock Ledger', to: '/inventory/stock-ledger' }, { label: 'Reorder Queue', to: '/inventory/reorder-queue' },
@@ -99,7 +86,13 @@ const SEARCH_TARGETS = NAV.flatMap(g => g.items).concat([
   { label: 'Loans & ODs', to: '/kpi/loans-ods' }, { label: 'Stock Value', to: '/inventory' },
   { label: 'Tally Sync', to: '/settings/tally-sync' }, { label: 'Audit Trail', to: '/audit-trail' },
   { label: 'Day Book', to: '/audit-trail/daybook' },
+  { label: 'Invitations', to: '/settings/invitations' },
 ]);
+
+function searchTargetAllowed(t, can) {
+  const cap = NAV_CAP[t.label] || capabilityForPath(t.to);
+  return !cap || can(cap);
+}
 
 function Dropdown({ trigger, children, width = 230, testid, className = '', up = false, triggerClassName }) {
   const [open, setOpen] = useState(false);
@@ -142,7 +135,7 @@ function CommandPalette() {
   const [dataHits, setDataHits] = useState([]);
   const navigate = useNavigate();
   const inputRef = useRef(null);
-  const { selectedCompany } = useAuth();
+  const { selectedCompany, can } = useWorkspace();
 
   // Mobile-parity data search: vouchers + ledgers + stock items via /api/dashboard/search.
   useEffect(() => {
@@ -160,7 +153,8 @@ function CommandPalette() {
 
   const results = useMemo(() => {
     const n = q.trim().toLowerCase();
-    const screens = (n ? SEARCH_TARGETS.filter(t => t.label.toLowerCase().includes(n)) : SEARCH_TARGETS)
+    const allowed = SEARCH_TARGETS.filter((t) => searchTargetAllowed(t, can));
+    const screens = (n ? allowed.filter(t => t.label.toLowerCase().includes(n)) : allowed)
       .slice(0, n ? 4 : 8).map(t => ({ ...t, kind: 'screen' }));
     const data = dataHits.slice(0, 8).map(d => ({
       label: d.label,
@@ -169,7 +163,7 @@ function CommandPalette() {
       to: dataResultTarget(d),
     }));
     return [...data, ...screens].slice(0, 10);
-  }, [q, dataHits]);
+  }, [q, dataHits, can]);
 
   useEffect(() => {
     const h = e => {
@@ -257,9 +251,20 @@ export default function AppShell() {
   const createRef = useClickOutside(() => setShowCreate(false));
   const location = useLocation();
   const navigate = useNavigate();
-  const { user, logout, companies, selectedCompany, selectCompany, selectedFY, selectFY, isPaired, isDesktopOnline, unpairFromTally, showToast } = useAuth();
-  const { workspaces, currentWorkspace, switchWorkspace, can, canCreate, entryMode } = useWorkspace();
+  const { user, logout, isDesktopOnline, unpairFromTally, showToast } = useAuth();
+  const {
+    workspaces, currentWorkspace, switchWorkspace, can, canCreate, entryMode, membershipType,
+    companies, selectedCompany, selectedFY, isPaired, selectCompany, selectFY, pairing,
+    demoMode, pairingStatus, reloadWorkspaces, role, isOwnerOrAdmin,
+  } = useWorkspace();
   const [unpairing, setUnpairing] = useState(false);
+  const canUnpairSidebar = typeof pairing?.canUnpair === 'boolean'
+    ? pairing.canUnpair
+    : isOwnerOrAdmin;
+  const reconnecting = pairingStatus === 'RECONNECTING'
+    || String(pairing?.status || '').toUpperCase() === 'RECONNECTING';
+  const showUnpairSidebar = canUnpairSidebar && (pairingStatus === 'CONNECTED' || reconnecting);
+  const canRenameWorkspace = membershipType === 'OWNER';
 
   const filteredNav = useMemo(() => NAV.map((g) => ({
     ...g,
@@ -392,8 +397,10 @@ export default function AppShell() {
                 <>
                   <span className="min-w-0 flex-1 leading-tight">
                     <span className="block truncate text-sm font-bold text-ink">{name}</span>
-                    <span className={`block truncate text-xs font-semibold ${isPaired && isDesktopOnline ? 'text-pos' : isPaired ? 'text-warn' : 'text-warn'}`}>
-                      {isPaired ? (isDesktopOnline ? lt('Tally connected') : lt('Tally paired · offline')) : lt('Connect Tally')}
+                    <span className={`block truncate text-xs font-semibold ${isPaired && isDesktopOnline && !demoMode ? 'text-pos' : 'text-warn'}`}>
+                      {reconnecting
+                        ? lt('Paired · waiting for first sync')
+                        : (demoMode ? lt('Demo Mode') : (isDesktopOnline ? lt('Tally connected') : lt('Tally paired · offline')))}
                     </span>
                   </span>
                   <ChevronDown size={14} strokeWidth={2} className="rotate-180 text-ink-faint" />
@@ -411,10 +418,15 @@ export default function AppShell() {
                 onClick={() => navigate('/settings/tally-sync')}
                 className="flex w-full items-center gap-3 rounded-lg px-3 py-2.5 text-left text-sm font-semibold text-ink-soft transition-colors hover:bg-cream hover:text-ink"
               >
-                <Zap size={16} strokeWidth={2} className={isPaired && isDesktopOnline ? 'text-pos' : 'text-warn'} />
-                <span className="flex-1">{isPaired ? (isDesktopOnline ? lt('Tally connected') : lt('Tally paired · offline')) : lt('Connect Tally')}</span>
+                <Zap size={16} strokeWidth={2} className={isPaired && isDesktopOnline && !demoMode ? 'text-pos' : 'text-warn'} />
+                <span className="flex-1">
+                  {reconnecting
+                    ? lt('Paired · waiting for first sync')
+                    : (demoMode ? lt('Demo Mode') : (isDesktopOnline ? lt('Tally connected') : lt('Tally paired · offline')))}
+                </span>
                 <span className="text-xs font-bold text-ink-faint">{lt('Sync settings')}</span>
               </button>
+              {showUnpairSidebar && (
               <button
                 data-testid="sidebar-unpair"
                 disabled={unpairing}
@@ -429,6 +441,7 @@ export default function AppShell() {
                 <Unplug size={16} strokeWidth={2} />
                 {unpairing ? lt('Unpairing…') : lt('Unpair Tally')}
               </button>
+              )}
               <button onClick={() => navigate('/settings/profile')} className="flex w-full items-center gap-3 rounded-lg px-3 py-2.5 text-left text-sm font-semibold text-ink-soft transition-colors hover:bg-cream hover:text-ink">
                 <User size={16} strokeWidth={2} /> {t('nav.profile', 'Profile')}
               </button>
@@ -486,16 +499,59 @@ export default function AppShell() {
             >
               <p className="px-5 pt-4 pb-2 text-xs font-bold uppercase tracking-wider text-ink-soft">{lt('Workspace')}</p>
               {(workspaces || []).map((w) => (
-                <button
-                  key={w.id}
-                  onClick={() => switchWorkspace(w.id)}
-                  data-testid={`workspace-option-${w.id}`}
-                  className="flex w-full items-center gap-3 px-5 py-3 text-left transition-colors hover:bg-cream"
-                >
-                  <span className="flex-1 truncate text-sm font-semibold text-ink">{w.name}</span>
-                  {currentWorkspace?.id === w.id && <Check size={16} strokeWidth={2.5} className="text-ink" />}
-                </button>
+                <div key={w.id} className="flex items-center gap-1 px-2">
+                  <button
+                    onClick={() => switchWorkspace(w.id)}
+                    data-testid={`workspace-option-${w.id}`}
+                    className="flex flex-1 items-center gap-3 rounded-md px-3 py-3 text-left transition-colors hover:bg-cream"
+                  >
+                    <span className="flex-1 truncate text-sm font-semibold text-ink">{w.name}</span>
+                    {currentWorkspace?.id === w.id && <Check size={16} strokeWidth={2.5} className="text-ink" />}
+                  </button>
+                  {String(w.membershipType || w.membership_type || '').toUpperCase() === 'OWNER' && (
+                    <button
+                      type="button"
+                      title={lt('Rename workspace')}
+                      className="rounded-md p-2 text-ink-soft hover:bg-cream hover:text-ink"
+                      onClick={async (e) => {
+                        e.stopPropagation();
+                        const name = window.prompt(lt('Rename workspace'), w.name);
+                        if (!name?.trim() || name.trim() === w.name) return;
+                        try {
+                          await api.patchWorkspace(w.id, { name: name.trim() });
+                          showToast?.(lt('Workspace renamed'), 'success');
+                          if (typeof reloadWorkspaces === 'function') await reloadWorkspaces();
+                          else window.location.reload();
+                        } catch (err) {
+                          showToast?.(err?.data?.error?.message || err.message || lt('Could not rename workspace'), 'warning');
+                        }
+                      }}
+                    >
+                      <Pencil size={14} strokeWidth={2} />
+                    </button>
+                  )}
+                </div>
               ))}
+              {canRenameWorkspace && currentWorkspace?.id && (
+                <button
+                  type="button"
+                  className="flex w-full items-center gap-2 border-t border-line px-5 py-3 text-left text-sm font-semibold text-ink hover:bg-cream"
+                  onClick={async () => {
+                    const name = window.prompt(lt('Rename workspace'), currentWorkspace?.name || '');
+                    if (!name?.trim() || name.trim() === currentWorkspace?.name) return;
+                    try {
+                      await api.patchWorkspace(currentWorkspace.id, { name: name.trim() });
+                      showToast?.(lt('Workspace renamed'), 'success');
+                      if (typeof reloadWorkspaces === 'function') await reloadWorkspaces();
+                      else window.location.reload();
+                    } catch (err) {
+                      showToast?.(err?.data?.error?.message || err.message || lt('Could not rename workspace'), 'warning');
+                    }
+                  }}
+                >
+                  <Pencil size={14} /> {lt('Rename current workspace')}
+                </button>
+              )}
               <button
                 type="button"
                 className="flex w-full items-center gap-2 border-t border-line px-5 py-3 text-left text-sm font-semibold text-ink hover:bg-cream"

@@ -6,6 +6,7 @@ import { useNavigate } from 'react-router-dom';
 import { ChevronDown, Plus, Trash2, Search } from 'lucide-react';
 import { Field, Input, Select, Button, Toggle, useLabelT } from '../kit';
 import { useAuth } from '../../contexts/AuthContext';
+import { useWorkspace } from '../../contexts/WorkspaceContext';
 import api from '../../services/api';
 import BarcodeGunInput from '../BarcodeGunInput';
 import { readStockCache, writeStockCache } from '../../utils/stockCache';
@@ -765,10 +766,15 @@ export const billAllocationsPayload = (allocations, amount, remainderMode) => {
 /* ── Submit plumbing shared by every form ─────────────────────────────────── */
 export function useSubmit() {
   const lt = useLabelT();
+  const { pairingStatus } = useWorkspace();
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState('');
   const [done, setDone] = useState(null);
   const run = useCallback(async fn => {
+    if (String(pairingStatus || '').toUpperCase() !== 'CONNECTED') {
+      setError(lt('Connect Tally and complete the first sync before creating live entries.'));
+      return null;
+    }
     setError(''); setSaving(true);
     try {
       const res = await fn();
@@ -786,7 +792,7 @@ export function useSubmit() {
     } finally {
       setSaving(false);
     }
-  }, []);
+  }, [pairingStatus, lt]);
   return { saving, error, setError, done, run };
 }
 

@@ -19,6 +19,7 @@ import {
 } from './common';
 import api from '../../services/api';
 import { useAuth } from '../../contexts/AuthContext';
+import { useWorkspace } from '../../contexts/WorkspaceContext';
 import { INR_NOTES, sumDenomCounts, emptyDenomCounts, autoSplitAmount } from '../../utils/cashDenominations';
 
 const METHODS = ['Cash', 'Bank', 'Cheque', 'NEFT', 'RTGS', 'UPI'];
@@ -627,7 +628,8 @@ export function ContraForm({ onClose, onCreated }) {
 
 export function ExpenseForm({ onClose, onCreated, onViewDocument }) {
   const lt = useLabelT();
-  const { isPaired, selectedFY } = useAuth();
+  const { selectedFY } = useAuth();
+  const { pairingStatus } = useWorkspace();
   const { loading, error: loadError, opt, company, retry } = useCreateData(['ledgers', 'banks', 'partiesExpense']);
   const numberingPolicy = useNumberingPolicy(company?.guid);
   const { saving, error, setError, done, run } = useSubmit();
@@ -655,7 +657,9 @@ export function ExpenseForm({ onClose, onCreated, onViewDocument }) {
   }, [entryType]);
 
   const submit = async () => {
-    if (!isPaired) return setError('Pair with Tally Desktop first.');
+    if (String(pairingStatus || '').toUpperCase() !== 'CONNECTED') {
+      return setError('Connect and sync Tally before creating vouchers.');
+    }
     if (!expenseLedger) return setError('Expense ledger is required.');
     if (!paidFrom) return setError('Paid-from ledger is required.');
     if (!date) return setError('Date is required.');
