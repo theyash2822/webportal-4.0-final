@@ -6,3 +6,6 @@ dist/
 .env
 .env.*
 !.env.example
+# Templates carry variable names only and must be committed, or nobody can
+# reproduce a staging build.
+!.env.staging.example

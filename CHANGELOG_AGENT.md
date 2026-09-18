@@ -4,6 +4,115 @@ Format: Date | Task | Files Changed | Behavior Changed | Tested | Risks
 
 ---
 
+## 2026-09-18 | Staging build target + no-accidental-production guard
+Files: `src/services/config.js`, `src/contexts/SettingsContext.jsx`, `src/services/config.test.js`, `.env.staging.example`, `package.json`
+- Added `VITE_APP_ENV` and `assertEnvironmentTarget()`: a staging build cannot
+  point at `api.tallydekho.com`, and misconfiguration is reported at module load
+  rather than surfacing as confusing runtime data.
+- `SettingsContext.jsx` now imports the shared API base from `services/config`
+  instead of reading `import.meta.env.VITE_API_URL` directly, so configuration
+  stays in one place.
+- Added `npm run build:staging` (Vite `--mode staging`) and
+  `.env.staging.example` (variable names only).
+- Tested: `npm test` → 5 files / 20 tests PASS, including staging-target guards.
+- Risks: no staging deployment exists yet, so this is verified by unit test only.
+
+---
+
+## 2026-09-14 | Workspace settings roof + invites/toasts/activity
+Files: `ModuleLayout.jsx`, `Invitations.jsx`, `Billing.jsx`, `TeamAccess.jsx`, `WorkspaceContext.jsx`, `api.js`, `websocket.js`, `settingsCapabilities.test.js`, `ROUTING_MAP.md`, `API_USAGE.md`, `CHANGELOG_AGENT.md`
+- Settings top tabs: **Account** (Profile, License) + **Workspace** (Company, Team, Invitations, Billing, Payment modes, Lifecycle). Tally Sync stays under Connection.
+- Invitations: Received + Sent (pending) with revoke; surface load errors; toasts on accept/decline/revoke.
+- Billing: toast on seat purchase / create workspace.
+- Activity: humanize `event_type`, actor name; live refresh on `workspace_audit` / `membership_changed`.
+Tested: `npm test`
+Risks: Sent list needs `members.invite` (Owner always).
+
+---
+
+## 2026-09-14 | Phase D — server canPair/canUnpair + no legacy unpair
+Files: `Settings.jsx`, `AuthContext.jsx`, `AppShell.jsx`, `TeamAccess.jsx`
+- Pair/Unpair UI from backend `canPair`/`canUnpair` (not editable tally.pair)
+- Unpair requires workspace id (no `/tally-sync/unpair` fallback)
+- Restore/Replace conflict copy; invite CONNECTED messaging
+Tested: lint/build pending founder E2E
+Risks: none for theme
+
+---
+
+## 2026-09-14 | Workspace-scoped pair/unpair + live hydrate on CONNECTED
+Files changed: `api.js`, `websocket.js`, `AuthContext.jsx`, `WorkspaceContext.jsx`, `Settings.jsx`, `CHANGELOG_AGENT.md`
+- Tally Sync pair/unpair uses `/workspaces/:id/tally/pair|unpair` (same as Mobile).
+- Listen `tally_connection` / `synced` / `unpaired`; RECONNECTING → CONNECTED hydrates live books (poll no longer skips).
+- Pair stays Demo until first sync; Unpair forces Demo.
+Tested: not yet (needs pair + Desktop sync).
+Risks: extra company reloads on socket events.
+
+---
+
+
+Files changed: `navCapabilities.js`, `WorkspaceContext.jsx`, `AuthContext.jsx`, `AppShell.jsx`, `Dashboard.jsx`, `Settings.jsx`, `Billing.jsx`, `Invitations.jsx`, `App.jsx`, `RequireCapability.jsx`, `settingsCapabilities.js` (+test), `ModuleLayout.jsx`, `SettingsLayout.jsx`, `ROUTING_MAP.md`, `API_USAGE.md`, `CHANGELOG_AGENT.md`
+- Demo SoT: `demoMode = UNPAIRED || RECONNECTING`; CONNECTED never Demo / never demoOnly hydrate; RECONNECTING banner “Paired · waiting for first sync”; stop synthesizing CONNECTED from paired+online.
+- Sidebar Unpair gated: Owner OR `tally.unpair`.
+- Module routes + CommandPalette fail-closed via `NAV_CAP` / `RequireCapability`.
+- Hard Sync / Restore Approve/Reject: Owner || System Admin (`isOwnerOrAdmin`) only.
+- Billing Owner-only; hide Complete order (dev) unless non-prod + `VITE_ALLOW_DEV`; Razorpay missing → checkout fail-closed.
+- Lifecycle nav/route Owner-only.
+- Invitation inbox page + nav + pending badge (Mobile parity).
+Tested: `npm test` (12), `npm run build`.
+Risks: Admin with `billing.manage` no longer sees Billing (intentional Wave 4).
+
+---
+
+## 2026-09-12 | Fix Remove member (API direct + UX)
+Files changed: `src/services/config.js`, `src/services/api.js`, `src/pages/settings/TeamAccess.jsx`, `CHANGELOG_AGENT.md`
+- Dev API no longer depends on flaky Vite `/api` proxy — `API_ROOT`/`BASE_URL` hit backend host directly (CORS already open). Root cause of Remove: DELETE succeeded on `:3001` but proxy to Vite returned connection failures.
+- Remove: coerce user id, `type="button"`, danger variant, busy state, clearer network error; DELETE sends no body.
+Tested: backend DELETE `/api/workspaces/:id/members/:userId` → 200; web `npm test`.
+Risks: ensure `VITE_API_URL` points at reachable backend; hard-refresh browser after config change.
+
+---
+
+## 2026-09-12 | Forensic + QA: payment-modes gate + GST activate
+Files changed: `src/App.jsx`, `src/config/settingsCapabilities.js`, `src/pages/Settings.jsx`, `CHANGELOG_AGENT.md`
+- Gated `/settings/payment-modes` with `RequireCapability` + `SETTINGS_ROUTE_GUARDS` / path capabilities.
+- Mounted GST workspace activation card on E-Invoice settings (`domain="gst"`).
+- QA restored broken `SETTINGS_ROUTE_GUARDS` export (parse fix).
+Tested: `npm test` (11), `npm run build`; coordinated with backend Demo fail-closed.
+Risks: Razorpay/SES/encryption still env-dependent (YELLOW residual).
+
+---
+
+## 2026-09-12 | QA fix: SETTINGS_ROUTE_GUARDS export
+Files changed: `src/config/settingsCapabilities.js`, `CHANGELOG_AGENT.md`
+- Restored missing `export const SETTINGS_ROUTE_GUARDS = { ... }` (orphaned object keys broke vitest/oxc parse and would break App.jsx route guards).
+Tested: `npm test` (11), `npm run build`
+Risks: none
+
+---
+
+## 2026-09-12 | Vitest §40 subset + pure helpers
+Files changed: `package.json`, `vitest.config.js`, `src/test/setup.js`, `src/utils/entryMode.js`, `src/utils/partyCategory.js`, `src/config/settingsCapabilities.js` (tests), `WorkspaceContext.jsx`, `TeamAccess.jsx`, `*.test.js`, `CHANGELOG_AGENT.md`
+- Added vitest + Testing Library (jsdom); script `npm test` → `vitest run`
+- Extracted `canCreateWithEntryMode`; moved `partyCategory` to utils; tests for entryMode, settingsCapabilities filter, partyCategory, featureFlags smoke
+Tested: `npm test`, `npm run build`
+Risks: none
+
+---
+
+## 2026-09-12 | Remaining Web MD partials (Demo Mode, gates, invites, roles, Razorpay, integrations)
+Files changed: `Dashboard.jsx`, `AppShell.jsx`, `Settings.jsx`, `App.jsx`, `SettingsLayout.jsx`, `RequireCapability.jsx`, `settingsCapabilities.js`, `TeamAccess.jsx`, `Billing.jsx`, `WorkspaceLifecycle.jsx`, `AuthContext.jsx`, `api.js`, `API_USAGE.md`, `ROUTING_MAP.md`, `CHANGELOG_AGENT.md`
+- Demo Mode banner/chip/label when unpaired (Dashboard, AppShell, Tally Sync).
+- Settings nav filtered by capabilities via SettingsLayout; RequireCapability guards team/billing/lifecycle/einvoice/ewb.
+- Invite form full scopes (FY/ledger/godown/cost centre); Role create modal + delete non-system roles.
+- E-Invoice/EWB workspace activation (status + credit cost + activate).
+- Billing Razorpay checkout with manual fallback; transfer confirmTokens/confirmUrls copyable for Owner.
+- AppShell/Dashboard prefer useWorkspace for company/FY/pairing; AuthContext note MD §5.
+Tested: `npm run build`.
+Risks: Razorpay needs KEY_ID/SECRET; integration activate needs configured credentials + wallet credits.
+
+---
+
 ## 2026-09-12 | Pairing: show backend already-paired copy
 Files changed: `Settings.jsx`
 Tally Sync shows the backend DEVICE_ALREADY_PAIRED / WORKSPACE_ALREADY_HAS_DESKTOP message (unpair-elsewhere vs unpair-this-workspace) plus a one-desktop-per-workspace hint.
@@ -20,6 +129,34 @@ Files changed: `WorkspaceContext.jsx`, `TeamAccess.jsx`, `api.js`, `API_USAGE.md
 - Global 403: CAPABILITY_DENIED / SCOPE_* get friendly "Not allowed. Ask your Workspace administrator." without clearing token.
 Tested: `npm run build`.
 Risks: Cost-centre list routes may 404 until backend ships; GUID fallback still works.
+
+---
+
+## 2026-09-12 | Fix Remove/Suspend member permissions
+Files: TeamAccess.jsx, WorkspaceContext.jsx; backend workspaceApi + roleService
+- Remove/Suspend no longer silent-fail; show errors; Owner always allowed.
+- API uses canonical `members.remove` / `members.suspend` / `members.unsuspend`.
+- Builtin role seed refreshes missing caps (Admin gets members.remove).
+- `can()` resolves legacy workspace.* aliases.
+Tested: vite build.
+Risks: Restart backend so seed refresh runs on next workspace bootstrap.
+
+---
+
+## 2026-09-12 | Fix: Demo Mode shows Demo company data when unpaired
+Files: `AuthContext.jsx`, `Dashboard.jsx`, `WorkspaceContext.jsx`
+- Unpaired no longer clears companies / blanks dashboard.
+- Loads Demo company only (hides live Tally books); Dashboard fetches KPIs for Demo.
+- Banner: sample Demo data while unpaired.
+Tested: manual reasoning vs mobile WorkspaceContext demo pick.
+Risks: If ensureDemoCompany never seeded for workspace, company list may still be empty — pair once or wait for bootstrap seed.
+
+---
+
+## 2026-09-12 | Close all Web MD partials (§42 exit polish)
+Files: Demo Mode (Dashboard/AppShell/Tally Sync), SettingsLayout + RequireCapability, TeamAccess invite scopes + role CRUD, Billing Razorpay+manual, Lifecycle confirm tokens, E-Invoice/EWB activate, Workspace company surface, vitest §40 subset (11), settingsCapabilities/entryMode helpers. Backend cost-centre list enrichment.
+Tested: `npm test` 11 pass; `vite build` OK.
+Risks: Live Razorpay/SES still need env secrets; cost centres depend on data/fallback discovery.
 
 ---
 

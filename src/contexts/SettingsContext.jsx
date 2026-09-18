@@ -6,12 +6,9 @@ import {
   getCurrencySymbol,
   DEFAULT_FORMAT_SETTINGS,
 } from '../utils/format';
-import { USE_MOCK } from '../services/config';
+import { USE_MOCK, APP_URL as API_BASE } from '../services/config';
 import i18n, { languageToCode } from '../i18n';
 import { getAuthToken } from '../utils/authStorage';
-
-// Same-origin by default: backend is reverse-proxied at /app on the portal host.
-const API_BASE = import.meta.env.VITE_API_URL || '/app';
 
 const DEFAULT_SETTINGS = {
   language: 'English',
