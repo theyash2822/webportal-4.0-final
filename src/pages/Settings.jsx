@@ -17,6 +17,7 @@ import VoucherConfigPanel from '../components/settings/VoucherConfigPanel';
 import { registerWebPushToken, getPushPermissionStatus } from '../services/push';
 import { clearOnboardingForReplay } from '../utils/onboardingNav';
 import { getAuthToken } from '../utils/authStorage';
+import { isEventForActiveWorkspace } from '../utils/workspaceEvents';
 import { formatBankCardNumber } from '../utils/voucherConfig';
 
 function Section({ title, sub, children, actions, testid, translated = false }) {
@@ -402,8 +403,10 @@ export function SettingsCompany() {
 /* ── Tally sync ───────────────────────────────────────────────────────────── */
 export function SettingsTallySync() {
   const lt = useLabelT();
-  const { isPaired, isDesktopOnline, markPaired, markUnpaired, loadCompanies, unpairFromTally } = useAuth();
+  const { isDesktopOnline, markPaired, markUnpaired, loadCompanies, unpairFromTally } = useAuth();
   const { pairing, membershipType, isOwnerOrAdmin, pairingStatus, currentWorkspace, loadWorkspaceContext } = useWorkspace();
+  // Pairing of the SELECTED workspace — never a user-global flag.
+  const isPaired = pairingStatus === 'CONNECTED' || pairingStatus === 'RECONNECTING';
   // Server-provided action flags (fallback to Owner/Admin membership only — never editable tally.pair cap)
   const canPair = typeof pairing?.canPair === 'boolean'
     ? pairing.canPair
@@ -431,15 +434,22 @@ export function SettingsTallySync() {
   const showUnpair = canUnpair && (connectionLabel === 'CONNECTED' || connectionLabel === 'RECONNECTING');
   const load = useCallback(async () => {
     setState(s => ({ ...s, loading: true, error: '' }));
+    const stamp = api.workspaceStamp();
     try {
       const response = await api.fetchTallySyncStatus();
+      // A status for the workspace we just left must not repaint this panel;
+      // the switch re-runs load() for the new one.
+      if (!api.isWorkspaceCurrent(stamp)) {
+        setState(s => ({ ...s, loading: false }));
+        return;
+      }
       const data = response?.data ?? response;
       const nextPaired = !!(data?.is_paired ?? data?.isPaired);
       setDevice(data?.device || null);
       setPaired(nextPaired);
       setOnline(!!data?.desktop_online);
-      if (nextPaired) markPaired();
-      else markUnpaired();
+      if (nextPaired) markPaired(stamp.id);
+      else markUnpaired(stamp.id);
       const appr = await api.fetchWorkspaceApprovals().catch(() => null);
       const d = appr?.data ?? appr;
       if (d) setApprovals({
@@ -451,16 +461,18 @@ export function SettingsTallySync() {
     } catch (err) {
       setState(s => ({ ...s, loading: false, error: err?.message || 'Unable to load pairing status' }));
     }
-  }, [markPaired, markUnpaired]);
+  }, [markPaired, markUnpaired, currentWorkspace?.id]);
   useEffect(() => { load(); }, [load]);
   useEffect(() => { setPaired(isPaired); setOnline(!!isDesktopOnline); }, [isPaired, isDesktopOnline]);
   useEffect(() => {
-    const un1 = wsService.on('hard_sync_request', () => { load(); });
-    const un2 = wsService.on('hard_sync_status', () => { load(); });
-    const un3 = wsService.on('restore_status', () => { load(); });
-    const un4 = wsService.on('tally_connection', () => { load(); });
-    const un5 = wsService.on('synced', () => { load(); });
-    const un6 = wsService.on('unpaired', () => { load(); });
+    // Only reload for events raised by the workspace on screen.
+    const onWorkspaceEvent = (data) => { if (isEventForActiveWorkspace(data)) load(); };
+    const un1 = wsService.on('hard_sync_request', onWorkspaceEvent);
+    const un2 = wsService.on('hard_sync_status', onWorkspaceEvent);
+    const un3 = wsService.on('restore_status', onWorkspaceEvent);
+    const un4 = wsService.on('tally_connection', onWorkspaceEvent);
+    const un5 = wsService.on('synced', onWorkspaceEvent);
+    const un6 = wsService.on('unpaired', onWorkspaceEvent);
     return () => { un1(); un2(); un3(); un4(); un5(); un6(); };
   }, [load]);
   const pair = async () => {
@@ -472,7 +484,7 @@ export function SettingsTallySync() {
     try {
       const response = await api.pairWorkspaceTally(wsId, code.trim());
       const awaiting = response?.data?.awaiting_desktop_claim;
-      if (!awaiting) markPaired();
+      if (!awaiting) markPaired(wsId);
       setPaired(true);
       setCode('');
       await loadCompanies({ forceDefaultFY: true, demoOnly: true });

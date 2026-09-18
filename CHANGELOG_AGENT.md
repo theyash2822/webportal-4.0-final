@@ -4,6 +4,31 @@ Format: Date | Task | Files Changed | Behavior Changed | Tested | Risks
 
 ---
 
+## 2026-09-18 | Workspace isolation (pairing, socket events, late responses) + central 401 refresh
+Files: `src/contexts/AuthContext.jsx`, `src/contexts/WorkspaceContext.jsx`, `src/services/api.js`, `src/utils/authStorage.js`, `src/utils/stockCache.js`, `src/utils/workspaceEvents.js` (new), `src/layouts/AppShell.jsx`, `src/pages/Dashboard.jsx`, `src/pages/Settings.jsx`, `src/pages/auth/Login.jsx`, plus 4 test files
+- Removed the user-global `isPaired` state and the `localStorage['isPaired']`
+  key. Pairing is now tracked per workspace id; the company Demo filter and
+  every consumer read the selected workspace's status.
+- Socket handlers for `synced` / `tally_connection` / `unpaired` / `paired` and
+  the WorkspaceContext soft-tally handler ignore events that name a different
+  workspace, or no workspace at all. `logout` stays session-wide.
+- Added a workspace generation stamp in `api.js`; `loadCompanies`,
+  `refreshPairingStatus`, `bootstrap`, `switchWorkspace` and the Tally Sync
+  panel discard responses that land after a switch.
+- `switchWorkspace` clears capabilities/role/entry mode before fetching the new
+  context and restores the previous workspace if that fetch fails.
+- Stock cache key is now workspace + company + FY.
+- Refresh token stored at login; central 401 handler refreshes once (single
+  flight for concurrent 401s) and replays the request. Refresh failure signs
+  out; 403 still never does; refresh leaves workspace/company selection alone.
+- Tested: `npm test` → 9 files / 50 tests PASS (was 5 / 22). `npm run build` OK.
+- Risks: refresh token lives in sessionStorage next to the access token — an
+  HttpOnly cookie needs backend support. Socket filtering assumes the backend
+  change that stamps `workspaceId` on all four events has shipped; until then
+  those events are dropped and the 10s poll plus workspace context drive state.
+
+---
+
 ## 2026-09-18 | Staging build target + no-accidental-production guard
 Files: `src/services/config.js`, `src/contexts/SettingsContext.jsx`, `src/services/config.test.js`, `.env.staging.example`, `package.json`
 - Added `VITE_APP_ENV` and `assertEnvironmentTarget()`: a staging build cannot

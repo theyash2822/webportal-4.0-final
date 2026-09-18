@@ -2,7 +2,13 @@
 // Auth + live reads: /api/* (mobile V2). Legacy writes: /app/*.
 
 import { API_ROOT, WS_URL } from './config.js';
-import { getAuthToken } from '../utils/authStorage.js';
+import {
+  getAuthToken,
+  setAuthToken,
+  getRefreshToken,
+  setRefreshToken,
+  clearAuthToken,
+} from '../utils/authStorage.js';
 import { flag, WS_STORAGE_KEY } from '../config/featureFlags.js';
 
 const TALLY_BASE = API_ROOT;
@@ -14,16 +20,33 @@ try {
   _workspaceId = localStorage.getItem(WS_STORAGE_KEY) || null;
 } catch { /* private mode */ }
 
+// Bumped on every change of active workspace. A→B→A must not look like "never left A",
+// so callers compare the whole stamp, not just the id.
+let _workspaceGeneration = 0;
+
 export function getWorkspaceId() {
   return _workspaceId;
 }
 
 export function setWorkspaceId(id) {
-  _workspaceId = id || null;
+  const next = id || null;
+  if (next !== _workspaceId) _workspaceGeneration += 1;
+  _workspaceId = next;
   try {
     if (id) localStorage.setItem(WS_STORAGE_KEY, id);
     else localStorage.removeItem(WS_STORAGE_KEY);
   } catch { /* ignore */ }
+}
+
+/** Stamp of the active workspace, captured before an await. */
+export function workspaceStamp() {
+  return { id: _workspaceId, generation: _workspaceGeneration };
+}
+
+/** False once the user has switched away — the caller must discard its result. */
+export function isWorkspaceCurrent(stamp) {
+  if (!stamp) return false;
+  return stamp.generation === _workspaceGeneration && stamp.id === _workspaceId;
 }
 
 function attachWorkspaceHeader(headers, { skipWorkspace = false } = {}) {
@@ -56,13 +79,98 @@ function throwHttpError(res, body = {}) {
   });
 }
 
+// ─── Session: refresh-on-401 ─────────────────────────────────────────────────
+// The access token lives 15 minutes. Without this every long-lived tab silently
+// breaks, and a burst of parallel 401s would fire a refresh per request.
+
+const REFRESH_PATH = '/api/auth/refresh';
+
+let _refreshInFlight = null;
+let _onUnauthorized = null;
+
+/** AuthContext registers the sign-out it wants when the session is truly gone. */
+export function setUnauthorizedHandler(fn) {
+  _onUnauthorized = typeof fn === 'function' ? fn : null;
+}
+
+/** Persist the tokens returned by verify-otp / verify-pin / register / refresh. */
+export function storeAuthSession(session = {}) {
+  const d = session?.data ?? session ?? {};
+  const access = d.access_token || d.accessToken || d.token;
+  const refresh = d.refresh_token || d.refreshToken;
+  if (access) setAuthToken(access);
+  if (refresh) setRefreshToken(refresh);
+  return { access_token: access || null, refresh_token: refresh || null };
+}
+
+/** One refresh at a time; every concurrent 401 awaits the same call. */
+function refreshAccessToken() {
+  if (_refreshInFlight) return _refreshInFlight;
+  _refreshInFlight = (async () => {
+    const refresh_token = getRefreshToken();
+    if (!refresh_token) return null;
+    try {
+      const res = await fetch(`${API_ROOT}${REFRESH_PATH}`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ refresh_token }),
+      });
+      if (!res.ok) return null;
+      const body = await res.json().catch(() => null);
+      const d = body?.data ?? body ?? {};
+      if (!d.access_token) return null;
+      // Workspace and company selection are deliberately untouched here.
+      storeAuthSession(d);
+      return d.access_token;
+    } catch {
+      return null;
+    }
+  })();
+  _refreshInFlight.finally(() => { _refreshInFlight = null; });
+  return _refreshInFlight;
+}
+
+/** Session is unrecoverable. 403 never reaches this — capability denial is not expiry. */
+function handleUnauthorized() {
+  if (!getAuthToken() && !getRefreshToken()) return;
+  clearAuthToken();
+  const fn = _onUnauthorized;
+  if (fn) {
+    try { fn(); } catch { /* handler must not break the caller */ }
+  }
+}
+
+/**
+ * Single exit point for every authenticated request: on 401 refresh once,
+ * replay once, and sign out if the replay is still rejected.
+ */
+async function authedFetch(url, init = {}, opts = {}) {
+  const { skipAuth = false, bearer } = opts;
+  const baseHeaders = init.headers || {};
+  const build = () => {
+    const headers = { ...baseHeaders };
+    const token = bearer || (!skipAuth ? getToken() : null);
+    if (token) headers['Authorization'] = `Bearer ${token}`;
+    attachWorkspaceHeader(headers, opts);
+    return { ...init, headers };
+  };
+
+  const res = await fetch(url, build());
+  if (res.status !== 401 || skipAuth || bearer) return res;
+
+  const fresh = await refreshAccessToken();
+  if (!fresh) {
+    handleUnauthorized();
+    return res;
+  }
+  const replayed = await fetch(url, build());
+  if (replayed.status === 401) handleUnauthorized();
+  return replayed;
+}
+
 // ─── Root GET (/api/*, /tally/*) ─────────────────────────────────────────────
 async function apiGet(path, opts = {}) {
-  const headers = {};
-  const token = getToken();
-  if (token) headers['Authorization'] = `Bearer ${token}`;
-  attachWorkspaceHeader(headers, opts);
-  const res = await fetch(`${API_ROOT}${path}`, { headers });
+  const res = await authedFetch(`${API_ROOT}${path}`, {}, opts);
   if (!res.ok) {
     const e = await res.json().catch(() => ({}));
     throwHttpError(res, e);
@@ -71,18 +179,14 @@ async function apiGet(path, opts = {}) {
 }
 
 async function apiRequest(method, path, body = null, opts = {}) {
-  const { skipAuth = false, bearer } = opts;
   const headers = {};
   const hasBody = body !== undefined && body !== null;
   if (hasBody) headers['Content-Type'] = 'application/json';
-  const token = bearer || (!skipAuth ? getToken() : null);
-  if (token) headers['Authorization'] = `Bearer ${token}`;
-  attachWorkspaceHeader(headers, opts);
-  const res = await fetch(`${API_ROOT}${path}`, {
+  const res = await authedFetch(`${API_ROOT}${path}`, {
     method,
     headers,
     body: hasBody ? JSON.stringify(body) : undefined,
-  });
+  }, opts);
   if (!res.ok) {
     const e = await res.json().catch(() => ({}));
     throwHttpError(res, e);
@@ -103,6 +207,8 @@ export function unwrapAuth(res) {
   return {
     success: typeof res?.success === 'boolean' ? res.success : res?.status !== false,
     access_token: d.access_token || d.token,
+    refresh_token: d.refresh_token || d.refreshToken || null,
+    session_id: d.session_id || d.sessionId || null,
     requires_2fa: !!(d.requires_2fa || d.requires2FA),
     is_new_user: !!(d.is_new_user || d.isNewUser),
     is_paired: !!(d.is_paired ?? d.isPaired),
@@ -1014,11 +1120,7 @@ export const fetchBarcodesByGuids = (companyGuid, stockGuids = []) =>
 
 /** Same as mobile downloadBarcodeTemplate — GET CSV text */
 export const downloadBarcodeTemplate = async (companyGuid) => {
-  const headers = {};
-  const token = getToken();
-  if (token) headers.Authorization = `Bearer ${token}`;
-  attachWorkspaceHeader(headers);
-  const res = await fetch(`${API_ROOT}${withCompany('/api/inventory/barcodes/template', companyGuid)}`, { headers });
+  const res = await authedFetch(`${API_ROOT}${withCompany('/api/inventory/barcodes/template', companyGuid)}`);
   if (!res.ok) throw Object.assign(new Error(`HTTP ${res.status}`), { status: res.status });
   return res.text();
 };
@@ -1405,21 +1507,17 @@ export const fetchOtherTaxesLateChallans = async (body = {}) => {
 
 // ─── Tally Write API (creates vouchers/masters in Tally via desktop proxy) ────
 async function tallyRequest(endpoint, body) {
-  const headers = { 'Content-Type': 'application/json' };
-  const token = getToken();
-  if (token) headers['Authorization'] = `Bearer ${token}`;
-  attachWorkspaceHeader(headers);
-  const res = await fetch(`${TALLY_BASE}${endpoint}`, { method: 'POST', headers, body: JSON.stringify(body) });
+  const res = await authedFetch(`${TALLY_BASE}${endpoint}`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(body),
+  });
   if (!res.ok) { const e = await res.json().catch(()=>({})); throwHttpError(res, e); }
   return res.json();
 }
 
 async function tallyGet(endpoint) {
-  const headers = {};
-  const token = getToken();
-  if (token) headers['Authorization'] = `Bearer ${token}`;
-  attachWorkspaceHeader(headers);
-  const res = await fetch(`${TALLY_BASE}${endpoint}`, { headers });
+  const res = await authedFetch(`${TALLY_BASE}${endpoint}`);
   if (!res.ok) { const e = await res.json().catch(()=>({})); throwHttpError(res, e); }
   return res.json();
 }
@@ -1462,6 +1560,8 @@ const api = {
   // Auth
   sendOtp, verifyOtp, registerUser, verifyPin, resetPin, fetchMe, fetchMeWithToken, fetchCompaniesList, fetchCompanyYears, fetchCompaniesHydrated, normalizeApiCompanies, normalizeCompanyYears, updateMe, unwrapAuth,
   logoutApi, changePhone, changeEmail, registerPushToken, removePushToken,
+  storeAuthSession, setUnauthorizedHandler,
+  workspaceStamp, isWorkspaceCurrent,
   // Pairing
   pairWithTally, fetchTallySyncStatus, unpairTally, pairWorkspaceTally, unpairWorkspaceTally,
   fetchWorkspaceApprovals, approveHardSync, rejectHardSync, approveWorkspaceRestore,

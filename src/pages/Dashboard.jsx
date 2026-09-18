@@ -90,19 +90,18 @@ export default function Dashboard() {
   const navigate = useNavigate();
   const { key: routeKey } = useParams();
   const [drill, setDrill] = useState(routeKey && KPI_KEYS.includes(routeKey) ? routeKey : null);
-  const { authBootstrapping, syncVersion, isPaired: authIsPaired } = useAuth();
+  const { authBootstrapping, syncVersion } = useAuth();
   const {
-    selectedCompany, selectedFY, isPaired: wsIsPaired, pairing, demoMode: wsDemoMode, pairingStatus,
+    selectedCompany, selectedFY, pairing, demoMode: wsDemoMode, pairingStatus,
     companies: wsCompanies,
   } = useWorkspace();
-  const isPaired = typeof wsIsPaired === 'boolean' ? wsIsPaired : !!authIsPaired;
   const connectionStatus = String(pairing?.status || pairingStatus || '').toUpperCase();
   const demoMode = typeof wsDemoMode === 'boolean'
     ? wsDemoMode
     : (() => {
       if (connectionStatus === 'CONNECTED') return false;
       if (connectionStatus === 'UNPAIRED' || connectionStatus === 'RECONNECTING') return true;
-      // Status unknown — fail-closed Demo (do not use isPaired for live eligibility)
+      // Status unknown — fail-closed Demo
       return true;
     })();
   const reconnecting = connectionStatus === 'RECONNECTING';
@@ -254,7 +253,7 @@ export default function Dashboard() {
     selectedCompany?.guid,
     selectedFY?.uniqueId,
     period,
-    isPaired,
+    connectionStatus,
     demoMode,
     authBootstrapping,
     syncVersion,

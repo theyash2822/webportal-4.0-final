@@ -254,9 +254,11 @@ export default function AppShell() {
   const { user, logout, isDesktopOnline, unpairFromTally, showToast } = useAuth();
   const {
     workspaces, currentWorkspace, switchWorkspace, can, canCreate, entryMode, membershipType,
-    companies, selectedCompany, selectedFY, isPaired, selectCompany, selectFY, pairing,
+    companies, selectedCompany, selectedFY, selectCompany, selectFY, pairing,
     demoMode, pairingStatus, reloadWorkspaces, role, isOwnerOrAdmin,
   } = useWorkspace();
+  // Pairing of the SELECTED workspace — never a user-global flag.
+  const isPaired = pairingStatus === 'CONNECTED' || pairingStatus === 'RECONNECTING';
   const [unpairing, setUnpairing] = useState(false);
   const canUnpairSidebar = typeof pairing?.canUnpair === 'boolean'
     ? pairing.canUnpair

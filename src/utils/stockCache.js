@@ -1,8 +1,12 @@
-/** Per-company stock list cache — invalidated on WS sync (mobile stockCache parity). */
+/** Per-workspace + per-company stock list cache — invalidated on WS sync (mobile stockCache parity). */
+import { getWorkspaceId } from '../services/api';
+
 const PREFIX = 'td_stock_cache_';
 
-export function stockCacheKey(companyGuid, fy) {
-  return `${PREFIX}${companyGuid || 'none'}_${fy || 'fy'}`;
+/** A Tally GUID is only unique inside one workspace, so the workspace has to be in the key. */
+export function stockCacheKey(companyGuid, fy, workspaceId) {
+  const ws = workspaceId ?? getWorkspaceId();
+  return `${PREFIX}${ws || 'nows'}_${companyGuid || 'none'}_${fy || 'fy'}`;
 }
 
 export function readStockCache(companyGuid, fy) {

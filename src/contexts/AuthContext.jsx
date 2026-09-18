@@ -8,14 +8,18 @@ import api, {
   fetchTallySyncStatus,
   resolveActiveCompanyGuid,
   getWorkspaceId,
+  workspaceStamp,
+  isWorkspaceCurrent,
+  setUnauthorizedHandler,
+  storeAuthSession,
   unpairWorkspaceTally,
 } from '../services/api';
 import wsService from '../services/websocket';
 import { invalidateStockCache } from '../utils/stockCache';
+import { isEventForActiveWorkspace } from '../utils/workspaceEvents';
 import { tryAutoRegisterPush } from '../services/push';
 import {
   getAuthToken,
-  setAuthToken,
   clearAuthToken,
   requestAuthTokenFromPeers,
   AUTH_TOKEN_EVENT,
@@ -23,8 +27,12 @@ import {
 
 const AuthContext = createContext(null);
 
-// Company / FY / isPaired remain stored here for persistence, but the preferred
-// consumer surface is WorkspaceContext (MD §5) which re-exports these fields.
+// Company / FY remain stored here for persistence, but the preferred consumer
+// surface is WorkspaceContext (MD §5) which re-exports these fields.
+// Pairing is NOT user-global: it is tracked per workspace id, because the same
+// user can own an unpaired workspace and be a member of a paired one.
+
+const PAIRED_STATUSES = new Set(['CONNECTED', 'RECONNECTING']);
 
 (function cleanStaleToken() {
   const t = getAuthToken();
@@ -32,6 +40,8 @@ const AuthContext = createContext(null);
     clearAuthToken();
     localStorage.clear();
   }
+  // Retired: a single user-global pairing flag is what bled across workspaces.
+  try { localStorage.removeItem('isPaired'); } catch { /* private mode */ }
 })();
 
 function isDemoCompany(c) {
@@ -55,7 +65,7 @@ export function AuthProvider({ children }) {
   const [companies, setCompanies] = useState(() => { try { return JSON.parse(localStorage.getItem('companies')) || []; } catch { return []; } });
   const [selectedCompany, setSelectedCompany] = useState(() => { try { return JSON.parse(localStorage.getItem('selectedCompany')); } catch { return null; } });
   const [selectedFY, setSelectedFY] = useState(() => { try { return JSON.parse(localStorage.getItem('selectedFY')); } catch { return null; } });
-  const [isPaired,  setIsPaired]  = useState(() => localStorage.getItem('isPaired') === 'true');
+  const [workspacePairing, setWorkspacePairing] = useState({});
   const [isDesktopOnline, setIsDesktopOnline] = useState(false);
   const [authBootstrapping, setAuthBootstrapping] = useState(false);
   const [syncToast, setSyncToast] = useState(null);
@@ -66,6 +76,26 @@ export function AuthProvider({ children }) {
   const selectedCompanyRef = useRef(selectedCompany);
   selectedCompanyRef.current = selectedCompany;
   const lastPairingStatusRef = useRef('');
+  // Written synchronously so a loadCompanies() in the same tick reads the new status.
+  const workspacePairingRef = useRef(workspacePairing);
+
+  const setWorkspacePairingStatus = useCallback((workspaceId, status) => {
+    const wsId = workspaceId || getWorkspaceId();
+    if (!wsId) return;
+    const next = String(status || '').toUpperCase() || 'UNPAIRED';
+    if (workspacePairingRef.current[wsId] === next) return;
+    workspacePairingRef.current = { ...workspacePairingRef.current, [wsId]: next };
+    setWorkspacePairing(workspacePairingRef.current);
+  }, []);
+
+  /** Pairing of one workspace, read at call time. Unknown → treated as unpaired (fail closed). */
+  const isWorkspacePaired = useCallback((workspaceId) => {
+    const wsId = workspaceId || getWorkspaceId();
+    if (!wsId) return false;
+    return PAIRED_STATUSES.has(workspacePairingRef.current[wsId]);
+  }, []);
+
+  const activeWorkspacePaired = PAIRED_STATUSES.has(workspacePairing[getWorkspaceId()]);
 
   // Multi-tab / migration: pick up tokens written by authStorage (session + BroadcastChannel).
   useEffect(() => {
@@ -90,6 +120,23 @@ export function AuthProvider({ children }) {
     setSelectedCompany(null);
     setSelectedFY(null);
   }, []);
+
+  /** Local teardown shared by logout and the central 401 handler. */
+  const clearSessionState = useCallback(() => {
+    clearAuthToken();
+    localStorage.clear();
+    workspacePairingRef.current = {};
+    setWorkspacePairing({});
+    setToken(null); setUser(null); setCompanies([]); setSelectedCompany(null); setSelectedFY(null);
+    setIsDesktopOnline(false);
+    wsService.disconnect();
+  }, []);
+
+  // A 403 is a capability denial and must never land here.
+  useEffect(() => {
+    setUnauthorizedHandler(clearSessionState);
+    return () => setUnauthorizedHandler(null);
+  }, [clearSessionState]);
 
   const applyCompanies = useCallback((arr, { preserveGuid, activeGuid, forceDefaultFY } = {}) => {
     localStorage.setItem('companies', JSON.stringify(arr));
@@ -139,12 +186,16 @@ export function AuthProvider({ children }) {
 
   const loadCompanies = useCallback(async ({ forceDefaultFY = false, demoOnly = null } = {}) => {
     if (!token) return [];
+    const stamp = workspaceStamp();
     try {
       const activeGuid = await resolveActiveCompanyGuid();
+      if (!isWorkspaceCurrent(stamp)) return [];
       const preserve = selectedCompanyRef.current?.guid;
       let arr = await fetchCompaniesHydrated({ forGuid: preserve || activeGuid || undefined });
-      // MD Demo Mode: when unpaired, show Demo company only (hide live Tally books)
-      const unpaired = demoOnly === true || (demoOnly == null && localStorage.getItem('isPaired') !== 'true');
+      if (!isWorkspaceCurrent(stamp)) return [];
+      // MD Demo Mode: when the SELECTED workspace is unpaired, show Demo company
+      // only (hide live Tally books). Never a user-global flag.
+      const unpaired = demoOnly === true || (demoOnly == null && !isWorkspacePaired(stamp.id));
       if (unpaired) {
         const demos = arr.filter(isDemoCompany);
         // Fail closed: never show live Tally books while unpaired
@@ -162,6 +213,8 @@ export function AuthProvider({ children }) {
           arr = arr.map((c) => (c.guid === hydrateGuid ? { ...c, years } : c));
         } catch (_) { /* keep company even if years fail */ }
       }
+      // A response for the workspace we just left must never repaint the new one.
+      if (!isWorkspaceCurrent(stamp)) return [];
       applyCompanies(arr, {
         preserveGuid: stillValid ? preserve : (preferDemoGuid || undefined),
         activeGuid: preferDemoGuid || undefined,
@@ -172,7 +225,7 @@ export function AuthProvider({ children }) {
       console.warn('fetchCompanies failed:', err.message);
       return [];
     }
-  }, [token, applyCompanies]);
+  }, [token, applyCompanies, isWorkspacePaired]);
 
   const loadCompaniesRef = useRef(loadCompanies);
   loadCompaniesRef.current = loadCompanies;
@@ -185,62 +238,68 @@ export function AuthProvider({ children }) {
     if (!token) return;
     wsService.connect(token);
 
-    const unSynced   = wsService.on('synced',   () => {
+    // Every workspace-specific event is dropped unless it names the workspace on
+    // screen. An event with no workspaceId cannot be attributed, so it is dropped too.
+    const unSynced   = wsService.on('synced',   (data) => {
+      if (!isEventForActiveWorkspace(data)) return;
       showToast('✅ Tally data synced', 'success');
       invalidateStockCache(selectedCompanyRef.current?.guid);
       lastPairingStatusRef.current = 'CONNECTED';
+      setWorkspacePairingStatus(getWorkspaceId(), 'CONNECTED');
       loadCompaniesRef.current?.({ forceDefaultFY: isDemoCompany(selectedCompanyRef.current), demoOnly: false });
       setSyncVersion(v => v + 1);
     });
     const unTallyConn = wsService.on('tally_connection', (data) => {
+      if (!isEventForActiveWorkspace(data)) return;
+      const wsId = getWorkspaceId();
       const status = String(data?.status || '').toUpperCase();
       lastPairingStatusRef.current = status || lastPairingStatusRef.current;
       if (status === 'CONNECTED') {
-        localStorage.setItem('isPaired', 'true');
-        setIsPaired(true);
+        setWorkspacePairingStatus(wsId, 'CONNECTED');
         loadCompaniesRef.current?.({ forceDefaultFY: true, demoOnly: false });
         setSyncVersion(v => v + 1);
       } else if (status === 'UNPAIRED') {
-        localStorage.setItem('isPaired', 'false');
-        setIsPaired(false);
+        setWorkspacePairingStatus(wsId, 'UNPAIRED');
         setIsDesktopOnline(false);
         loadCompaniesRef.current?.({ forceDefaultFY: true, demoOnly: true });
       } else if (status === 'RECONNECTING') {
-        localStorage.setItem('isPaired', 'true');
-        setIsPaired(true);
+        setWorkspacePairingStatus(wsId, 'RECONNECTING');
         loadCompaniesRef.current?.({ forceDefaultFY: true, demoOnly: true });
       }
     });
-    const unUnpaired = wsService.on('unpaired', () => {
-      setIsPaired(false);
-      localStorage.setItem('isPaired', 'false');
+    const unUnpaired = wsService.on('unpaired', (data) => {
+      if (!isEventForActiveWorkspace(data)) return;
+      setWorkspacePairingStatus(getWorkspaceId(), 'UNPAIRED');
       lastPairingStatusRef.current = 'UNPAIRED';
       // Demo Mode: load Demo company data (do not leave the shell empty)
       loadCompaniesRef.current?.({ forceDefaultFY: true, demoOnly: true });
       showToast('⚠️ Tally unpaired — Demo Mode', 'warning');
     });
+    // Session-wide, not workspace-scoped — every tab of this user must sign out.
     const unLogout   = wsService.on('logout',   () => logout());
     const unPaired   = wsService.on('paired', async (d) => {
-      localStorage.setItem('isPaired', 'true');
-      setIsPaired(true);
+      if (!isEventForActiveWorkspace(d)) return;
+      setWorkspacePairingStatus(getWorkspaceId(), 'RECONNECTING');
       lastPairingStatusRef.current = 'RECONNECTING';
       showToast(`✅ Paired with ${d?.deviceName || 'Desktop App'}! Waiting for first sync…`, 'success');
       await loadCompaniesRef.current({ forceDefaultFY: true, demoOnly: true });
     });
 
     return () => { unSynced(); unTallyConn(); unUnpaired(); unLogout(); unPaired(); wsService.disconnect(); };
-  }, [token]);
+  }, [token, setWorkspacePairingStatus]);
 
   const refreshPairingStatus = useCallback(async ({ hydrateCompanies = false } = {}) => {
     if (!token) return false;
+    const stamp = workspaceStamp();
     try {
       const res = await fetchTallySyncStatus();
+      // 10s poll: a reply for the workspace we just left must not be applied.
+      if (!isWorkspaceCurrent(stamp)) return isWorkspacePaired(stamp.id);
       const data = res?.data ?? res;
       const status = String(data?.workspace_status || data?.pairingStatus || data?.pairing_status || '').toUpperCase();
       const paired = !!(data?.is_paired ?? data?.isPaired);
-      const wasPaired = localStorage.getItem('isPaired') === 'true';
-      localStorage.setItem('isPaired', paired ? 'true' : 'false');
-      setIsPaired(paired);
+      const wasPaired = isWorkspacePaired(stamp.id);
+      setWorkspacePairingStatus(stamp.id, status || (paired ? 'RECONNECTING' : 'UNPAIRED'));
       setIsDesktopOnline(!!data?.desktop_online);
       // CONNECTED never demoOnly; UNPAIRED|RECONNECTING → Demo. Prefer backend status over is_paired alone.
       const demoOnly = status
@@ -250,7 +309,7 @@ export function AuthProvider({ children }) {
       const prevStatus = lastPairingStatusRef.current;
       lastPairingStatusRef.current = resolved;
       const selectedIsDemo = isDemoCompany(selectedCompanyRef.current);
-      // RECONNECTING → CONNECTED used to skip hydrate because isPaired was already true.
+      // RECONNECTING → CONNECTED used to skip hydrate because the workspace already read as paired.
       if (demoOnly) {
         await loadCompaniesRef.current({ forceDefaultFY: true, demoOnly: true });
       } else if (hydrateCompanies || !wasPaired || prevStatus !== 'CONNECTED' || selectedIsDemo) {
@@ -261,9 +320,9 @@ export function AuthProvider({ children }) {
       }
       return paired;
     } catch {
-      return localStorage.getItem('isPaired') === 'true';
+      return isWorkspacePaired(stamp.id);
     }
-  }, [token, clearCompaniesState]);
+  }, [token, isWorkspacePaired, setWorkspacePairingStatus]);
 
   useEffect(() => {
     if (!token) return;
@@ -280,11 +339,11 @@ export function AuthProvider({ children }) {
 
   useEffect(() => {
     // Prefer refreshPairingStatus / Workspace bootstrap for CONNECTED vs RECONNECTING.
-    // Only force Demo hydrate when clearly unpaired (never treat paired as live books).
-    if (token && !authBootstrapping && !isPaired) {
+    // Only force Demo hydrate when the SELECTED workspace is clearly unpaired.
+    if (token && !authBootstrapping && !activeWorkspacePaired) {
       loadCompanies({ demoOnly: true });
     }
-  }, [token, authBootstrapping, isPaired, loadCompanies]);
+  }, [token, authBootstrapping, activeWorkspacePaired, loadCompanies]);
 
   useEffect(() => {
     if (!token) return;
@@ -293,32 +352,33 @@ export function AuthProvider({ children }) {
     return () => clearInterval(id);
   }, [token, refreshPairingStatus]);
 
-  const login = async (authToken, userData) => {
+  /** `session` is the unwrapped verify-otp / verify-pin payload — it carries the refresh token. */
+  const login = async (authToken, userData, session = null) => {
     setAuthBootstrapping(true);
     try {
       let freshUser = userData;
-      let paired = false;
+      // User-level hint only: which workspaces are paired is decided per workspace
+      // by WorkspaceContext, so this never becomes UI pairing state.
+      let userHasAnyPairing = false;
 
       try {
         const meRes = await fetchMeWithToken(authToken);
         const me = meRes?.data;
         if (me) {
           freshUser = { ...userData, ...me };
-          paired = !!(me.is_paired ?? me.isPaired);
+          userHasAnyPairing = !!(me.is_paired ?? me.isPaired);
         }
       } catch (e) {
         console.warn('fetchMe during login failed:', e.message);
       }
 
-      // Do not hydrate live books from is_paired alone — RECONNECTING must stay Demo
-      // until Workspace context confirms CONNECTED (refreshPairingStatus / bootstrap).
+      // Do not hydrate live books from is_paired alone — the selected workspace's
+      // status is still unknown here, so Demo companies only (fail closed).
       let companiesArr = [];
-      if (paired) {
+      if (userHasAnyPairing) {
         try {
-          companiesArr = await fetchCompaniesHydrated({
-            bearer: authToken,
-            demoOnly: true,
-          });
+          const fetched = await fetchCompaniesHydrated({ bearer: authToken });
+          companiesArr = fetched.filter(isDemoCompany);
           if (companiesArr.length) {
             applyCompanies(companiesArr, { forceDefaultFY: true });
           }
@@ -327,19 +387,17 @@ export function AuthProvider({ children }) {
         }
       }
 
-      setAuthToken(authToken);
+      storeAuthSession({ access_token: authToken, refresh_token: session?.refresh_token });
       localStorage.setItem('authUser', JSON.stringify(freshUser));
-      localStorage.setItem('isPaired', paired ? 'true' : 'false');
 
       setUser(freshUser);
-      setIsPaired(paired);
-      if (!paired || !companiesArr.length) {
+      if (!companiesArr.length) {
         clearCompaniesState();
       }
       setToken(authToken);
       tryAutoRegisterPush().catch(() => {});
 
-      return { paired, hasCompanies: companiesArr.length > 0 };
+      return { paired: userHasAnyPairing, hasCompanies: companiesArr.length > 0 };
     } finally {
       setAuthBootstrapping(false);
     }
@@ -351,12 +409,7 @@ export function AuthProvider({ children }) {
     } catch (err) {
       console.warn('[auth] logout API failed:', err?.message || err);
     }
-    const pairedState = localStorage.getItem('isPaired');
-    clearAuthToken();
-    localStorage.clear();
-    if (pairedState) localStorage.setItem('isPaired', pairedState);
-    setToken(null); setUser(null); setCompanies([]); setSelectedCompany(null); setSelectedFY(null);
-    wsService.disconnect();
+    clearSessionState();
   };
 
   const selectCompany = useCallback(async (company) => {
@@ -390,17 +443,21 @@ export function AuthProvider({ children }) {
     setSelectedFY(fy);
   }, []);
 
-  const markPaired = useCallback(() => {
-    localStorage.setItem('isPaired', 'true');
-    setIsPaired(true);
-  }, []);
+  /** Paired, for one workspace. Never downgrades a live CONNECTED to RECONNECTING. */
+  const markPaired = useCallback((workspaceId) => {
+    const wsId = workspaceId || getWorkspaceId();
+    if (!wsId) return;
+    if (workspacePairingRef.current[wsId] === 'CONNECTED') return;
+    setWorkspacePairingStatus(wsId, 'RECONNECTING');
+  }, [setWorkspacePairingStatus]);
 
-  const markUnpaired = useCallback(() => {
-    localStorage.setItem('isPaired', 'false');
-    setIsPaired(false);
+  const markUnpaired = useCallback((workspaceId) => {
+    const wsId = workspaceId || getWorkspaceId();
+    if (!wsId) return;
+    setWorkspacePairingStatus(wsId, 'UNPAIRED');
     setIsDesktopOnline(false);
     loadCompaniesRef.current?.({ forceDefaultFY: true, demoOnly: true });
-  }, []);
+  }, [setWorkspacePairingStatus]);
 
   const unpairFromTally = useCallback(async () => {
     const wsId = getWorkspaceId();
@@ -408,17 +465,17 @@ export function AuthProvider({ children }) {
       throw new Error('Workspace required to unpair. Refresh and try again.');
     }
     await unpairWorkspaceTally(wsId);
-    localStorage.setItem('isPaired', 'false');
-    setIsPaired(false);
+    setWorkspacePairingStatus(wsId, 'UNPAIRED');
     setIsDesktopOnline(false);
     lastPairingStatusRef.current = 'UNPAIRED';
     await loadCompaniesRef.current?.({ forceDefaultFY: true, demoOnly: true });
     showToast('⚠️ Tally unpaired — Demo Mode', 'warning');
-  }, []);
+  }, [setWorkspacePairingStatus]);
 
   return (
     <AuthContext.Provider value={{
-      token, user, companies, selectedCompany, selectedFY, isPaired, isDesktopOnline, authBootstrapping, syncToast, syncVersion,
+      token, user, companies, selectedCompany, selectedFY, isDesktopOnline, authBootstrapping, syncToast, syncVersion,
+      workspacePairing, isWorkspacePaired, setWorkspacePairingStatus,
       login, logout, selectCompany, selectFY, loadCompanies, clearCompaniesState, markPaired, markUnpaired, unpairFromTally, refreshPairingStatus, showToast,
     }}>
       {children}

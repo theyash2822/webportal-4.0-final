@@ -58,7 +58,7 @@ function isValidEmail(v) {
 export default function Login() {
   const lt = useLabelT();
   const navigate = useNavigate();
-  const { login, markPaired } = useAuth();
+  const { login } = useAuth();
   // 'mobile' | 'otp' | 'pin' | 'resetotp' | 'newpin' | 'profile'
   const [step, setStep] = useState('mobile');
   const [country, setCountry] = useState(COUNTRIES[0]);
@@ -134,8 +134,9 @@ export default function Login() {
     }
     setSigningIn(true);
     try {
-      await login(auth.access_token, toAuthUser(auth.user));
-      if (auth.is_paired) markPaired();
+      // `auth` carries the refresh token; pairing is resolved per workspace by
+      // WorkspaceContext, so nothing user-global is marked as paired here.
+      await login(auth.access_token, toAuthUser(auth.user), auth);
       navigate('/', { replace: true });
     } catch (err) {
       setError(err?.message || lt('Sign in failed. Please try again.'));
@@ -234,7 +235,11 @@ export default function Login() {
       const auth = unwrapAuth(res);
       if (!auth.success || !auth.access_token) throw new Error(auth.message || lt('Registration failed. Please retry.'));
       sessionStorage.setItem('td.postAuthPath', '/settings/tally-sync');
-      await login(auth.access_token, toAuthUser(auth.user || { ...pendingSession?.user, name: profile.name.trim(), email: profile.email.trim() }));
+      await login(
+        auth.access_token,
+        toAuthUser(auth.user || { ...pendingSession?.user, name: profile.name.trim(), email: profile.email.trim() }),
+        auth,
+      );
       navigate('/settings/tally-sync', { replace: true });
     } catch (err) {
       setSigningIn(false);

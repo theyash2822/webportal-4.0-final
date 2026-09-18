@@ -4,10 +4,12 @@
  * Full HttpOnly cookie auth still requires backend support.
  */
 const TOKEN_KEY = 'authToken';
+const REFRESH_KEY = 'authRefreshToken';
 const CHANNEL = 'td-auth-token';
 const EVENT = 'td-auth-token-changed';
 
 let memoryToken = null;
+let memoryRefresh = null;
 let channel = null;
 
 function notify() {
@@ -16,24 +18,25 @@ function notify() {
   } catch { /* ignore */ }
 }
 
-function readSession() {
+function readSession(key = TOKEN_KEY) {
   try {
-    return sessionStorage.getItem(TOKEN_KEY);
+    return sessionStorage.getItem(key);
   } catch {
     return null;
   }
 }
 
-function writeSession(token) {
+function writeSession(token, key = TOKEN_KEY) {
   try {
-    if (token) sessionStorage.setItem(TOKEN_KEY, token);
-    else sessionStorage.removeItem(TOKEN_KEY);
+    if (token) sessionStorage.setItem(key, token);
+    else sessionStorage.removeItem(key);
   } catch { /* private mode */ }
 }
 
 function stripLegacyLocal() {
   try {
     localStorage.removeItem(TOKEN_KEY);
+    localStorage.removeItem(REFRESH_KEY);
   } catch { /* ignore */ }
 }
 
@@ -47,13 +50,19 @@ function getChannel() {
       if (msg.type === 'set' && typeof msg.token === 'string') {
         memoryToken = msg.token;
         writeSession(msg.token);
+        if (typeof msg.refresh === 'string' || msg.refresh === null) {
+          memoryRefresh = msg.refresh || null;
+          writeSession(memoryRefresh, REFRESH_KEY);
+        }
         notify();
       } else if (msg.type === 'clear') {
         memoryToken = null;
+        memoryRefresh = null;
         writeSession(null);
+        writeSession(null, REFRESH_KEY);
         notify();
       } else if (msg.type === 'ask' && memoryToken) {
-        channel.postMessage({ type: 'set', token: memoryToken });
+        channel.postMessage({ type: 'set', token: memoryToken, refresh: memoryRefresh });
       }
     };
   } catch {
@@ -98,14 +107,32 @@ export function setAuthToken(token) {
   const bc = getChannel();
   if (bc) {
     try {
-      bc.postMessage(memoryToken ? { type: 'set', token: memoryToken } : { type: 'clear' });
+      bc.postMessage(memoryToken ? { type: 'set', token: memoryToken, refresh: memoryRefresh } : { type: 'clear' });
     } catch { /* ignore */ }
   }
   notify();
 }
 
 export function clearAuthToken() {
+  memoryRefresh = null;
+  writeSession(null, REFRESH_KEY);
   setAuthToken(null);
+}
+
+/**
+ * Refresh token — same memory + sessionStorage lifetime as the access token.
+ * An HttpOnly cookie is the safer home for this and needs backend support.
+ */
+export function getRefreshToken() {
+  if (memoryRefresh) return memoryRefresh;
+  const fromSession = readSession(REFRESH_KEY);
+  if (fromSession) memoryRefresh = fromSession;
+  return memoryRefresh;
+}
+
+export function setRefreshToken(token) {
+  memoryRefresh = token || null;
+  writeSession(memoryRefresh, REFRESH_KEY);
 }
 
 /** Ask other tabs for a live token (new tab after sessionStorage miss). */

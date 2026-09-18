@@ -1,4 +1,4 @@
-import { createContext, useContext, useState, useEffect, useCallback, useMemo } from 'react';
+import { createContext, useContext, useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import { useAuth } from './AuthContext';
 import {
   fetchMyWorkspaces,
@@ -6,12 +6,26 @@ import {
   fetchMyInvitations,
   setWorkspaceId,
   getWorkspaceId,
+  workspaceStamp,
+  isWorkspaceCurrent,
 } from '../services/api';
 import { flag } from '../config/featureFlags.js';
 import { canCreateWithEntryMode } from '../utils/entryMode.js';
+import { isEventForActiveWorkspace } from '../utils/workspaceEvents';
 import wsService from '../services/websocket';
 
 const WorkspaceContext = createContext(null);
+
+/** Access state a workspace switch must drop before the new context lands. */
+const EMPTY_ACCESS = {
+  membershipType: null,
+  role: null,
+  capabilities: [],
+  entryMode: 'BOTH',
+  sensitivePolicies: {},
+  scopes: null,
+  pairing: null,
+};
 
 function unwrap(res) {
   return res?.data ?? res;
@@ -23,13 +37,13 @@ export function WorkspaceProvider({ children }) {
     companies,
     selectedCompany,
     selectedFY,
-    isPaired,
     selectCompany,
     selectFY,
     loadCompanies,
     clearCompaniesState,
     markPaired,
     markUnpaired,
+    setWorkspacePairingStatus,
     showToast,
   } = useAuth();
 
@@ -47,6 +61,25 @@ export function WorkspaceProvider({ children }) {
   const [wsError, setWsError] = useState(null);
   const capSet = useMemo(() => new Set(capabilities || []), [capabilities]);
 
+  // Read synchronously when a switch snapshots the outgoing workspace's access.
+  const membershipTypeRef = useRef(membershipType); membershipTypeRef.current = membershipType;
+  const roleRef = useRef(role); roleRef.current = role;
+  const capabilitiesRef = useRef(capabilities); capabilitiesRef.current = capabilities;
+  const entryModeRef = useRef(entryMode); entryModeRef.current = entryMode;
+  const sensitivePoliciesRef = useRef(sensitivePolicies); sensitivePoliciesRef.current = sensitivePolicies;
+  const scopesRef = useRef(scopes); scopesRef.current = scopes;
+  const pairingRef = useRef(pairing); pairingRef.current = pairing;
+
+  const applyAccess = useCallback((access) => {
+    setMembershipType(access.membershipType ?? null);
+    setRole(access.role ?? null);
+    setCapabilities(access.capabilities || []);
+    setEntryMode(access.entryMode || 'BOTH');
+    setSensitivePolicies(access.sensitivePolicies || {});
+    setScopes(access.scopes ?? null);
+    setPairing(access.pairing ?? null);
+  }, []);
+
   const pairingStatus = useMemo(
     () => String(pairing?.status || '').toUpperCase() || null,
     [pairing],
@@ -61,26 +94,30 @@ export function WorkspaceProvider({ children }) {
   const applyContext = useCallback((ctx) => {
     if (!ctx?.workspace) return;
     setCurrentWorkspace(ctx.workspace);
-    setMembershipType(ctx.access?.membershipType || ctx.access?.membership_type || null);
-    setRole(ctx.access?.role || null);
-    setCapabilities(ctx.access?.capabilities || []);
-    setEntryMode(ctx.access?.entryMode || 'BOTH');
-    setSensitivePolicies(ctx.access?.sensitivePolicies || {});
-    setScopes(ctx.access?.scopes || null);
-    setPairing(ctx.pairing || null);
+    applyAccess({
+      membershipType: ctx.access?.membershipType || ctx.access?.membership_type || null,
+      role: ctx.access?.role || null,
+      capabilities: ctx.access?.capabilities || [],
+      entryMode: ctx.access?.entryMode || 'BOTH',
+      sensitivePolicies: ctx.access?.sensitivePolicies || {},
+      scopes: ctx.access?.scopes || null,
+      pairing: ctx.pairing || null,
+    });
     setWorkspaceId(ctx.workspace.id);
     wsService.registerWorkspace(ctx.workspace.id);
-  }, []);
+  }, [applyAccess]);
 
-  /** Sync Auth isPaired from workspace pairing.status. markUnpaired only on switch (avoids wipe on soft refresh). */
+  /** Record pairing against the workspace the context belongs to, never user-wide. */
   const syncPairingFromCtx = useCallback((ctx, { allowUnpair = false } = {}) => {
+    const wsId = ctx?.workspace?.id;
+    if (!wsId) return;
     const status = String(ctx?.pairing?.status || '').toUpperCase();
     if (status === 'CONNECTED' || status === 'RECONNECTING') {
-      markPaired?.();
+      setWorkspacePairingStatus?.(wsId, status);
     } else if (allowUnpair && status === 'UNPAIRED') {
-      markUnpaired?.();
+      markUnpaired?.(wsId);
     }
-  }, [markPaired, markUnpaired]);
+  }, [setWorkspacePairingStatus, markUnpaired]);
 
   const refreshInvitations = useCallback(async () => {
     if (!token) {
@@ -99,8 +136,15 @@ export function WorkspaceProvider({ children }) {
     }
   }, [token]);
 
-  const loadWorkspaceContext = useCallback(async (workspaceId) => {
+  /**
+   * `stamp` pins the selection this call was started for. applyContext writes
+   * setWorkspaceId, so a late reply would otherwise drag the selection back to
+   * the workspace the user just left.
+   */
+  const loadWorkspaceContext = useCallback(async (workspaceId, { stamp } = {}) => {
+    const pinned = stamp || workspaceStamp();
     const res = await fetchWorkspaceContext(workspaceId);
+    if (!isWorkspaceCurrent(pinned)) return null;
     const ctx = unwrap(res);
     if (ctx?.denied) {
       setWsError('MEMBERSHIP_SUSPENDED');
@@ -114,8 +158,10 @@ export function WorkspaceProvider({ children }) {
     if (!token || !flag('workspace_model_enabled')) return;
     setWsBootstrapping(true);
     setWsError(null);
+    const stamp = workspaceStamp();
     try {
       const listRes = await fetchMyWorkspaces();
+      if (!isWorkspaceCurrent(stamp)) return;
       const list = unwrap(listRes) || [];
       const arr = Array.isArray(list) ? list : [];
       setWorkspaces(arr);
@@ -127,16 +173,18 @@ export function WorkspaceProvider({ children }) {
         setCurrentWorkspace(null);
         return;
       }
-      const ctx = await loadWorkspaceContext(target.id);
+      // null → the user switched while this bootstrap was in flight; drop it.
+      const ctx = await loadWorkspaceContext(target.id, { stamp });
+      if (!ctx) return;
       const status = String(ctx?.pairing?.status || '').toUpperCase();
-      // Align Auth isPaired with server pairing. CONNECTED never demoOnly; UNPAIRED|RECONNECTING → Demo.
-      const inDemo = status === 'UNPAIRED' || status === 'RECONNECTING'
-        || (!status && localStorage.getItem('isPaired') !== 'true');
-      if (status === 'CONNECTED' || status === 'RECONNECTING') markPaired?.();
-      else if (status === 'UNPAIRED') markUnpaired?.();
+      // Pairing is recorded against this workspace only. CONNECTED never demoOnly;
+      // UNPAIRED | RECONNECTING | unknown → Demo (fail closed).
+      const inDemo = status !== 'CONNECTED';
+      if (status === 'CONNECTED' || status === 'RECONNECTING') setWorkspacePairingStatus?.(target.id, status);
+      else if (status === 'UNPAIRED') markUnpaired?.(target.id);
       await loadCompanies?.({
         forceDefaultFY: inDemo,
-        demoOnly: status === 'CONNECTED' ? false : inDemo,
+        demoOnly: inDemo,
       });
       await refreshInvitations().catch((e) => {
         console.warn('[Workspace] invitations refresh:', e?.message);
@@ -148,7 +196,7 @@ export function WorkspaceProvider({ children }) {
     } finally {
       setWsBootstrapping(false);
     }
-  }, [token, loadWorkspaceContext, loadCompanies, markPaired, markUnpaired, refreshInvitations]);
+  }, [token, loadWorkspaceContext, loadCompanies, setWorkspacePairingStatus, markUnpaired, refreshInvitations]);
 
   useEffect(() => {
     if (!token) {
@@ -169,21 +217,25 @@ export function WorkspaceProvider({ children }) {
     const refreshList = () => { bootstrap().catch(() => {}); };
     const softTally = (evt, data) => {
       console.info(`[Workspace] ${evt}`, data);
-      if (currentWorkspace?.id) {
-        loadWorkspaceContext(currentWorkspace.id)
-          .then(async (ctx) => {
-            const fromEvt = String(data?.status || '').toUpperCase();
-            const fromCtx = String(ctx?.pairing?.status || '').toUpperCase();
-            const status = evt === 'unpaired' ? 'UNPAIRED' : (fromEvt || fromCtx);
-            syncPairingFromCtx(ctx, { allowUnpair: status === 'UNPAIRED' });
-            if (status === 'CONNECTED') {
-              await loadCompanies?.({ demoOnly: false, forceDefaultFY: true });
-            } else if (status === 'UNPAIRED' || status === 'RECONNECTING') {
-              await loadCompanies?.({ demoOnly: true, forceDefaultFY: true });
-            }
-          })
-          .catch(() => {});
-      }
+      // Tally events for another workspace (or with no workspace at all) must not
+      // reload this workspace's context or companies.
+      if (!currentWorkspace?.id) return;
+      if (!isEventForActiveWorkspace(data, currentWorkspace.id)) return;
+      const stamp = workspaceStamp();
+      loadWorkspaceContext(currentWorkspace.id, { stamp })
+        .then(async (ctx) => {
+          if (!ctx || !isWorkspaceCurrent(stamp)) return;
+          const fromEvt = String(data?.status || '').toUpperCase();
+          const fromCtx = String(ctx?.pairing?.status || '').toUpperCase();
+          const status = evt === 'unpaired' ? 'UNPAIRED' : (fromEvt || fromCtx);
+          syncPairingFromCtx(ctx, { allowUnpair: status === 'UNPAIRED' });
+          if (status === 'CONNECTED') {
+            await loadCompanies?.({ demoOnly: false, forceDefaultFY: true });
+          } else if (status === 'UNPAIRED' || status === 'RECONNECTING') {
+            await loadCompanies?.({ demoOnly: true, forceDefaultFY: true });
+          }
+        })
+        .catch(() => {});
     };
 
     const unInvitation = wsService.on('invitation', (data) => {
@@ -225,17 +277,46 @@ export function WorkspaceProvider({ children }) {
     if (!workspaceId || workspaceId === currentWorkspace?.id) return;
     // Clear Company/FY before loading target (LOCKED web doc §7)
     clearCompaniesState?.();
+    // The previous workspace's permissions must not stay on screen while the new
+    // context is in flight; snapshot them so a failed fetch can be undone.
+    const previous = {
+      workspaceId: currentWorkspace?.id || null,
+      workspace: currentWorkspace,
+      membershipType: membershipTypeRef.current,
+      role: roleRef.current,
+      capabilities: capabilitiesRef.current,
+      entryMode: entryModeRef.current,
+      sensitivePolicies: sensitivePoliciesRef.current,
+      scopes: scopesRef.current,
+      pairing: pairingRef.current,
+    };
+    applyAccess(EMPTY_ACCESS);
     setWorkspaceId(workspaceId);
-    const ctx = await loadWorkspaceContext(workspaceId);
+    const stamp = workspaceStamp();
+    let ctx = null;
+    try {
+      ctx = await loadWorkspaceContext(workspaceId, { stamp });
+    } catch (err) {
+      ctx = null;
+      console.warn('[Workspace] switch failed:', err?.message || err);
+    }
+    if (!isWorkspaceCurrent(stamp)) return;
+    if (!ctx) {
+      // Never leave the shell with no permissions at all — put the old workspace back.
+      setWorkspaceId(previous.workspaceId);
+      setCurrentWorkspace(previous.workspace);
+      applyAccess(previous);
+      showToast?.('Could not switch workspace. Staying on the current one.', 'warning');
+      return;
+    }
     syncPairingFromCtx(ctx, { allowUnpair: true });
     const status = String(ctx?.pairing?.status || '').toUpperCase();
-    const inDemo = status === 'UNPAIRED' || status === 'RECONNECTING' || !status;
     await loadCompanies?.({
       forceDefaultFY: true,
-      demoOnly: status === 'CONNECTED' ? false : inDemo,
+      demoOnly: status !== 'CONNECTED',
     });
     showToast?.('Workspace switched', 'success');
-  }, [currentWorkspace?.id, loadWorkspaceContext, syncPairingFromCtx, clearCompaniesState, loadCompanies, showToast]);
+  }, [currentWorkspace, applyAccess, loadWorkspaceContext, syncPairingFromCtx, clearCompaniesState, loadCompanies, showToast]);
 
   const can = useCallback((capabilityKey) => {
     // Fail closed: empty/unknown caps never elevate (OWNER always allowed)
@@ -271,11 +352,12 @@ export function WorkspaceProvider({ children }) {
     switchWorkspace,
     reloadWorkspaces: bootstrap,
     loadWorkspaceContext,
-    // Company / FY / pairing surface (MD §5) — Auth remains source of truth for backward compat
+    // Company / FY surface (MD §5) — Auth remains source of truth for backward compat.
+    // Pairing is NOT re-exported as a boolean: use pairingStatus / demoMode, which
+    // are scoped to the selected workspace.
     companies,
     selectedCompany,
     selectedFY,
-    isPaired,
     selectCompany,
     selectFY,
     loadCompanies,
@@ -320,7 +402,6 @@ export function useWorkspace() {
       companies: [],
       selectedCompany: null,
       selectedFY: null,
-      isPaired: false,
       selectCompany: async () => {},
       selectFY: () => {},
       loadCompanies: async () => {},
