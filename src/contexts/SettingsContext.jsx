@@ -6,7 +6,7 @@ import {
   getCurrencySymbol,
   DEFAULT_FORMAT_SETTINGS,
 } from '../utils/format';
-import { USE_MOCK, APP_URL as API_BASE } from '../services/config';
+import { USE_MOCK, API_ROOT } from '../services/config';
 import i18n, { languageToCode } from '../i18n';
 import { getAuthToken } from '../utils/authStorage';
 
@@ -44,7 +44,7 @@ export function SettingsProvider({ children }) {
   useEffect(() => {
     const token = getAuthToken();
     if (!token || USE_MOCK) return;
-    fetch(`${API_BASE}/user-settings`, {
+    fetch(`${API_ROOT}/api/auth/user-settings`, {
       headers: { Authorization: `Bearer ${token}` },
     })
       .then(r => r.json())
@@ -70,7 +70,7 @@ export function SettingsProvider({ children }) {
     const token = getAuthToken();
     if (!token || USE_MOCK) return;
     try {
-      await fetch(`${API_BASE}/user-settings`, {
+      await fetch(`${API_ROOT}/api/auth/user-settings`, {
         method: 'PATCH',
         headers: {
           Authorization: `Bearer ${token}`,

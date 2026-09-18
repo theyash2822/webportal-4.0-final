@@ -43,14 +43,12 @@ export function backendRootFromEnv(url = import.meta.env.VITE_API_URL) {
 }
 
 export const BACKEND_URL = backendRootFromEnv();
-export const APP_URL = `${BACKEND_URL}/app`;
 
 // Always hit the backend host directly. Dev previously used same-origin Vite proxy
 // (`API_ROOT=''`), but when Vite drops or proxy stalls, Team Access DELETE/remove
 // (and other /api calls) fail with a network error while the SPA shell still looks alive.
 // Backend CORS already allows the Vite origin; vite.config.js proxy remains as fallback.
 export const API_ROOT = BACKEND_URL;
-export const BASE_URL = APP_URL;
 export const WS_URL = import.meta.env.VITE_WS_URL || BACKEND_URL;
 
 assertEnvironmentTarget();

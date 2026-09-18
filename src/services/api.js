@@ -1,7 +1,7 @@
 // API Service — mirrors mobile app's apiService.js exactly
 // Auth + live reads: /api/* (mobile V2). Legacy writes: /app/*.
 
-import { API_ROOT, BASE_URL, WS_URL } from './config.js';
+import { API_ROOT, WS_URL } from './config.js';
 import { getAuthToken } from '../utils/authStorage.js';
 import { flag, WS_STORAGE_KEY } from '../config/featureFlags.js';
 
@@ -55,29 +55,6 @@ function throwHttpError(res, body = {}) {
     code: codeStr || undefined,
   });
 }
-
-// ─── Core request (/app/*) ───────────────────────────────────────────────────
-async function request(method, endpoint, body = null, skipAuth = false, bearer = null, opts = {}) {
-  const headers = { 'Content-Type': 'application/json' };
-  const token = bearer || (!skipAuth ? getToken() : null);
-  if (token) headers['Authorization'] = `Bearer ${token}`;
-  attachWorkspaceHeader(headers, opts);
-  const res = await fetch(`${BASE_URL}${endpoint}`, {
-    method,
-    headers,
-    body: body ? JSON.stringify(body) : undefined,
-  });
-  if (!res.ok) {
-    const err = await res.json().catch(() => ({}));
-    throwHttpError(res, err);
-  }
-  return res.json();
-}
-
-const get  = (ep, opts)    => request('GET',    ep, null, opts?.skipAuth, opts?.bearer, opts);
-const post = (ep, b, opts) => request('POST',   ep, b,    opts?.skipAuth, opts?.bearer, opts);
-const put  = (ep, b, opts) => request('PUT',    ep, b, false, null, opts);
-const del  = (ep, opts)    => request('DELETE', ep, null, false, null, opts);
 
 // ─── Root GET (/api/*, /tally/*) ─────────────────────────────────────────────
 async function apiGet(path, opts = {}) {

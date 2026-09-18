@@ -3,7 +3,23 @@
  * against live customer data. These tests pin the guard.
  */
 import { describe, it, expect } from 'vitest';
+import { readFileSync, readdirSync } from 'node:fs';
+import path from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { assertEnvironmentTarget, backendRootFromEnv, hostOf } from './config';
+
+const SRC_DIR = path.dirname(path.dirname(fileURLToPath(import.meta.url)));
+
+/** Every .js/.jsx under src, so a new file cannot quietly reintroduce /app. */
+function sourceFiles(dir = SRC_DIR) {
+  const out = [];
+  for (const entry of readdirSync(dir, { withFileTypes: true })) {
+    const full = path.join(dir, entry.name);
+    if (entry.isDirectory()) out.push(...sourceFiles(full));
+    else if (/\.jsx?$/.test(entry.name) && !/\.test\.jsx?$/.test(entry.name)) out.push(full);
+  }
+  return out;
+}
 
 const PROD_API = 'https://api.tallydekho.com/app';
 const PROD_WS = 'wss://api.tallydekho.com';
@@ -60,5 +76,31 @@ describe('no accidental production calls', () => {
     expect(() =>
       assertEnvironmentTarget('staging', 'https://api.tallydekho.com:443/app', STAGING_WS)
     ).toThrow();
+  });
+});
+
+describe('the legacy /app auth surface is not used', () => {
+  // RBAC Deployment B deletes the /app compatibility routes. Anything still
+  // calling them breaks at that moment, and the seven-day observation window
+  // cannot go clean while a supported client keeps the surface warm.
+  it('config exports no /app base for callers to reach for', () => {
+    const config = readFileSync(path.join(SRC_DIR, 'services', 'config.js'), 'utf8');
+    expect(config).not.toMatch(/export const APP_URL/);
+    expect(config).not.toMatch(/export const BASE_URL/);
+    // backendRootFromEnv still strips a trailing /app, because VITE_API_URL is
+    // configured that way in existing deployments. That is parsing, not calling.
+    expect(config).toMatch(/backendRootFromEnv/);
+  });
+
+  it('no source file builds a request against /app', () => {
+    const offenders = [];
+    for (const file of sourceFiles()) {
+      const src = readFileSync(file, 'utf8');
+      // A template literal or string that targets the legacy router.
+      if (/\$\{[A-Za-z_]*(APP_URL|BASE_URL)\}/.test(src) || /['"`]\/app\//.test(src)) {
+        offenders.push(path.relative(SRC_DIR, file));
+      }
+    }
+    expect(offenders).toEqual([]);
   });
 });
