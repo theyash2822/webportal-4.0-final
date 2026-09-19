@@ -7,6 +7,7 @@ import { Card, Button, Input, useLabelT } from '../../components/kit';
 import { useWorkspace } from '../../contexts/WorkspaceContext';
 import { useAuth } from '../../contexts/AuthContext';
 import api from '../../services/api';
+import { creditsToInrDisplay } from '../../utils/billingCredits';
 
 const TABS = [
   { id: 'overview', label: 'Overview' },
@@ -73,9 +74,10 @@ export function SettingsBilling() {
   const [invoices, setInvoices] = useState([]);
   const [orders, setOrders] = useState([]);
   const [rechargeCredits, setRechargeCredits] = useState('100');
-  const [rechargeAmount, setRechargeAmount] = useState('1000');
   const [razorpayConfigured, setRazorpayConfigured] = useState(null); // null unknown, true/false after probe
+  const [rechargeBusy, setRechargeBusy] = useState(false);
   const [state, setState] = useState({ loading: true, error: '', message: '' });
+  const rechargeAmountInr = useMemo(() => creditsToInrDisplay(rechargeCredits), [rechargeCredits]);
   const wsId = currentWorkspace?.id;
   // Wave 4: Billing Owner-only (Admin GST/EWB ≠ Billing)
   const isOwner = membershipType === 'OWNER';
@@ -165,11 +167,12 @@ export function SettingsBilling() {
       return;
     }
     const credits = Number(rechargeCredits);
-    const amountInr = Number(rechargeAmount);
-    if (!Number.isFinite(credits) || credits <= 0) {
+    if (!Number.isInteger(credits) || credits <= 0) {
       setState((s) => ({ ...s, error: lt('Enter a valid credits amount.') }));
       return;
     }
+    if (rechargeBusy) return;
+    setRechargeBusy(true);
     setState((s) => ({ ...s, message: '', error: '' }));
     try {
       const res = await api.createBillingRechargeOrder({
@@ -190,7 +193,8 @@ export function SettingsBilling() {
 
       const keyId = razorpayPayload?.razorpayKeyId || razorpayPayload?.key_id;
       const orderId = razorpayPayload?.razorpayOrderId || razorpayPayload?.razorpay_order_id;
-      const amountPaise = razorpayPayload?.amountPaise || Math.round((razorpayPayload?.amountInr || amountInr) * 100);
+      const amountPaise = razorpayPayload?.amountPaise
+        ?? (Number.isInteger(Number(razorpayPayload?.amountInr)) ? Number(razorpayPayload.amountInr) * 100 : null);
 
       if (!keyId || !orderId) {
         setRazorpayConfigured(false);
@@ -249,6 +253,8 @@ export function SettingsBilling() {
           ? lt('Payment order API not available yet on this backend.')
           : (err?.data?.error?.message || err.message),
       }));
+    } finally {
+      setRechargeBusy(false);
     }
   };
 
@@ -329,13 +335,14 @@ export function SettingsBilling() {
                   </div>
                   <div>
                     <label className="mb-1 block text-xs font-bold uppercase text-ink-soft">{lt('Amount (INR)')}</label>
-                    <Input value={rechargeAmount} onChange={(e) => setRechargeAmount(e.target.value)} />
+                    <Input value={rechargeAmountInr} readOnly data-testid="billing-recharge-inr" />
                   </div>
                 </div>
                 <Button
                   variant="primary"
                   onClick={createOrder}
-                  disabled={razorpayConfigured === false}
+                  disabled={razorpayConfigured === false || rechargeBusy}
+                  data-testid="billing-recharge-submit"
                 >
                   {lt('Recharge')}
                 </Button>
@@ -426,7 +433,7 @@ export function SettingsBilling() {
               <ul className="divide-y divide-line">
                 {(txns || []).slice(0, 40).map((t) => (
                   <li key={t.id} className="flex justify-between py-2 text-sm">
-                    <span className="text-ink">{t.kind || t.reference}</span>
+                    <span className="text-ink">{t.kind || t.reference}{t.workspace_id ? ` · ${t.workspace_id}` : ''}</span>
                     <span className="text-ink-soft">{t.amount}</span>
                   </li>
                 ))}

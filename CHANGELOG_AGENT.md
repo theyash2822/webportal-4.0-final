@@ -4,6 +4,12 @@ Format: Date | Task | Files Changed | Behavior Changed | Tested | Risks
 
 ---
 
+## 2026-09-19 | Billing recharge uses server ₹1=1 credit; no plan cards
+Files: `pages/settings/Billing.jsx`, `utils/billingCredits.js` + test
+Behavior: INR field is derived and read-only; recharge button single-flight; transaction rows show workspace_id. Visual layout unchanged.
+Tested: vitest 77, build PASS
+Risks: none
+
 ## 2026-09-19 | Web production remediations — tenant isolation, Demo model, sockets
 Files: Auth/Workspace/Settings contexts, `api.js`, websocket, Dashboard/Cashflow/Compliance/TeamAccess/financials, create forms, notifications, tests
 - Company/FY persistence is user+workspace / user+workspace+company. Global `selectedCompany` / `selectedFY` / `companies` are no longer tenant authority and are deleted, not adopted.
