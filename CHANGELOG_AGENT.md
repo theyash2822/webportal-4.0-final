@@ -4,6 +4,12 @@ Format: Date | Task | Files Changed | Behavior Changed | Tested | Risks
 
 ---
 
+## 2026-09-19 | Snapshot branch `19-09-2026-final-code`
+Pushed to `theyash2822/webportal-4.0-final` (not `tallydekho-web` main).
+No extra product change beyond the billing-authority lock already on `cursor`.
+
+---
+
 ## 2026-09-19 | Billing recharge uses server ₹1=1 credit; no plan cards
 Files: `pages/settings/Billing.jsx`, `utils/billingCredits.js` + test
 Behavior: INR field is derived and read-only; recharge button single-flight; transaction rows show workspace_id. Visual layout unchanged.
