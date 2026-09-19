@@ -11,6 +11,7 @@ import { buildVoucherPdfHtml } from '../utils/voucherPdfBuild';
 import { printInvoice, htmlToPdfBlob } from '../utils/invoicePrint';
 import { downloadBlob } from '../services/invoicePdf';
 import wsService from '../services/websocket';
+import { isEventForActiveWorkspace } from '../utils/workspaceEvents';
 
 const isTdkRef = id => /^TD/i.test(String(id || '').trim());
 const isGuidLike = id => /^[0-9a-f-]{20,}$/i.test(String(id || '').trim());
@@ -75,6 +76,7 @@ export default function DocumentViewer() {
 
   useEffect(() => {
     const un = wsService.on('voucher:tallySynced', payload => {
+      if (!isEventForActiveWorkspace(payload)) return;
       const ref = payload?.tdkRef || payload?.tdk_reference_no || payload?.reference;
       if (ref && (ref === tdkRefRef.current || ref === id)) load();
     });

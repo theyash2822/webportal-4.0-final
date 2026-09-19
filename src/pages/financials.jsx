@@ -15,15 +15,22 @@ function useCompanyRequest(request) {
   const [state, setState] = useState({ data: null, loading: true, error: '' });
   const requestSeq = useRef(0);
   const load = useCallback(() => {
+    const stamp = api.workspaceStamp();
     if (!companyGuid) {
       setState({ data: null, loading: false, error: 'Select a company to view this report.' });
       return;
     }
-    const seq = ++requestSeq.current; // ignore stale responses (rapid company/FY/tab switches)
-    setState(s => ({ ...s, loading: true, error: '' }));
+    const seq = ++requestSeq.current;
+    setState({ data: null, loading: true, error: '' });
     Promise.resolve(request(companyGuid, selectedFY))
-      .then(res => { if (seq === requestSeq.current) setState({ data: dataOf(res), loading: false, error: '' }); })
-      .catch(err => { if (seq === requestSeq.current) setState({ data: null, loading: false, error: err.message || 'Unable to load report.' }); });
+      .then(res => {
+        if (seq !== requestSeq.current || !api.isWorkspaceCurrent(stamp)) return;
+        setState({ data: dataOf(res), loading: false, error: '' });
+      })
+      .catch(err => {
+        if (seq !== requestSeq.current || !api.isWorkspaceCurrent(stamp)) return;
+        setState({ data: null, loading: false, error: err.message || 'Unable to load report.' });
+      });
   }, [companyGuid, selectedFY?.uniqueId, request]);
   useEffect(load, [load, syncVersion]);
   return { ...state, retry: load };

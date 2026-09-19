@@ -110,8 +110,10 @@ export default function KpiPanel({ metric, onClose }) {
   const requestSeq = useRef(0);
   const load = useCallback(async () => {
     if (!metric || !selectedCompany?.guid) return;
+    const stamp = api.workspaceStamp();
     const seq = ++requestSeq.current; // only the latest request may commit state
-    const commit = fn => { if (seq === requestSeq.current) fn(); };
+    const commit = fn => { if (seq === requestSeq.current && api.isWorkspaceCurrent(stamp)) fn(); };
+    setData(null);
     setLoading(true); setError('');
     const guid = selectedCompany.guid;
     const fyFrom = selectedFY?.startDate || selectedFY?.begin_date;
@@ -273,7 +275,7 @@ export default function KpiPanel({ metric, onClose }) {
             { key: 'phone', label: 'Contact', render: r => r.phone ? (
               <span className="flex items-center gap-2" onClick={e => e.stopPropagation()}>
                 <a href={`tel:${r.phone}`} className="text-[12px] font-medium text-ink underline decoration-line underline-offset-2">{lt('Call')}</a>
-                <a href={`https://wa.me/91${String(r.phone).replace(/\D/g, '').slice(-10)}`} target="_blank" rel="noreferrer" className="text-[12px] font-medium text-pos underline decoration-line underline-offset-2">WhatsApp</a>
+                <a href={`https://wa.me/91${String(r.phone).replace(/\D/g, '').slice(-10)}`} target="_blank" rel="noopener noreferrer" className="text-[12px] font-medium text-pos underline decoration-line underline-offset-2">WhatsApp</a>
               </span>
             ) : '—' },
             { key: 'amount', label: 'Outstanding', align: 'right', render: r => <span className="font-semibold">{money(r.amount)}</span> },

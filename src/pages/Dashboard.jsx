@@ -8,7 +8,8 @@ import {
 import {
   AreaChart, Area, BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, Cell,
 } from 'recharts';
-import api from '../services/api';
+import api, { workspaceStamp, isWorkspaceCurrent, getWorkspaceId } from '../services/api';
+import { isDemoCompany, isDemoMode } from '../utils/isDemoCompany';
 import { useAuth } from '../contexts/AuthContext';
 import { useWorkspace } from '../contexts/WorkspaceContext';
 import { resolvePeriodDates, DASHBOARD_PERIOD_CODE } from '../utils/periodDates';
@@ -98,24 +99,14 @@ export default function Dashboard() {
   const connectionStatus = String(pairing?.status || pairingStatus || '').toUpperCase();
   const demoMode = typeof wsDemoMode === 'boolean'
     ? wsDemoMode
-    : (() => {
-      if (connectionStatus === 'CONNECTED') return false;
-      if (connectionStatus === 'UNPAIRED' || connectionStatus === 'RECONNECTING') return true;
-      // Status unknown — fail-closed Demo
-      return true;
-    })();
+    : isDemoMode(connectionStatus);
   const reconnecting = connectionStatus === 'RECONNECTING';
   const connectedEmpty =
     connectionStatus === 'CONNECTED' &&
     Array.isArray(wsCompanies) &&
-    wsCompanies.filter((c) => {
-      const name = String(c?.name || '').toLowerCase();
-      const guid = String(c?.guid || c?.id || '');
-      return c?.is_active !== false
-        && !name.startsWith('demo')
-        && !guid.startsWith('dddddddd-dddd-4ddd-8ddd-');
-    }).length === 0;
+    wsCompanies.filter((c) => c?.is_active !== false && !isDemoCompany(c)).length === 0;
   const { money, mc } = useFmt();
+  const activeWorkspaceId = getWorkspaceId();
 
   const [metrics, setMetrics] = useState({ tiles: [] });
   const [chartData, setChartData] = useState({ series: [], interval: null });
@@ -133,20 +124,31 @@ export default function Dashboard() {
   const [cashflowOpen, setCashflowOpen] = useState(false);
   const [partyName, setPartyName] = useState(null);
   const hasDataRef = useRef(false);
-  const prevCompanyRef = useRef(selectedCompany?.guid);
+  const prevIdentityRef = useRef(`${getWorkspaceId() || ''}|${selectedCompany?.guid || ''}|${selectedFY?.uniqueId || ''}`);
+
+  const clearFinancialState = () => {
+    setMetrics({ tiles: [] });
+    setChartData({ series: [], interval: null });
+    setKpiStrip([]);
+    setCostAnalysis({ total_raw: 0, heads: [] });
+    setRecent([]);
+    setCashflow(null);
+    setTopCustomers([]);
+    hasDataRef.current = false;
+  };
 
   const load = () => {
-    if (prevCompanyRef.current !== selectedCompany?.guid) {
-      prevCompanyRef.current = selectedCompany?.guid;
-      hasDataRef.current = false;
+    const identity = `${getWorkspaceId() || ''}|${selectedCompany?.guid || ''}|${selectedFY?.uniqueId || ''}`;
+    if (prevIdentityRef.current !== identity) {
+      prevIdentityRef.current = identity;
+      clearFinancialState();
     }
-    const soft = hasDataRef.current;
-    if (!soft) setLoading(true);
+    setLoading(true);
     setError('');
     setLoadWarn('');
     setCostFailed(false);
+    const stamp = workspaceStamp();
     if (authBootstrapping) {
-      if (!soft) setLoading(true);
       return;
     }
     // Demo Mode still loads KPIs from the Demo company — do not blank the dashboard.
@@ -156,13 +158,7 @@ export default function Dashboard() {
     const fyTo = selectedFY?.endDate || selectedFY?.end_date
       || selectedCompany?.years?.[0]?.endDate || selectedCompany?.years?.[0]?.end_date;
     if (!guid || !fyFrom || !fyTo) {
-      setMetrics({ tiles: [] });
-      setChartData({ series: [], interval: null });
-      setKpiStrip([]);
-      setCostAnalysis({ total_raw: 0, heads: [] });
-      setRecent([]);
-      setCashflow(null);
-      setTopCustomers([]);
+      clearFinancialState();
       setError(demoMode
         ? lt('Demo Mode — waiting for Demo company. Try refresh or Settings → Tally Sync.')
         : connectedEmpty
@@ -184,6 +180,7 @@ export default function Dashboard() {
       api.fetchDashboardChart(guid, code, from, to),
     ])
       .then((results) => {
+        if (!isWorkspaceCurrent(stamp) || prevIdentityRef.current !== identity) return;
         const [dashResult, custResult, costResult, chartResult] = results;
         const failed = [];
         if (dashResult.status === 'rejected') {
@@ -235,23 +232,22 @@ export default function Dashboard() {
         hasDataRef.current = true;
       })
       .catch(e => {
-        setMetrics({ tiles: [] });
-        setChartData({ series: [], interval: null });
-        setKpiStrip([]);
-        setCostAnalysis({ total_raw: 0, heads: [] });
+        if (!isWorkspaceCurrent(stamp) || prevIdentityRef.current !== identity) return;
+        clearFinancialState();
         setCostFailed(true);
-        setRecent([]);
-        setCashflow(null);
-        setTopCustomers([]);
         setError(e.message || lt('Failed to load dashboard'));
       })
-      .finally(() => setLoading(false));
+      .finally(() => {
+        if (!isWorkspaceCurrent(stamp) || prevIdentityRef.current !== identity) return;
+        setLoading(false);
+      });
   };
 
   // eslint-disable-next-line react-hooks/exhaustive-deps
   useEffect(load, [
     selectedCompany?.guid,
     selectedFY?.uniqueId,
+    activeWorkspaceId,
     period,
     connectionStatus,
     demoMode,

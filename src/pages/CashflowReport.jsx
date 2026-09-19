@@ -3,7 +3,7 @@ import { ArrowUpCircle, ArrowDownCircle, TrendingUp, TrendingDown } from 'lucide
 import { Button, Pill, Empty, Skeleton, Page, useLabelT, SERIES } from '../components/kit';
 import { useAuth } from '../contexts/AuthContext';
 import { useFmt } from './shared';
-import api from '../services/api';
+import api, { workspaceStamp, isWorkspaceCurrent, getWorkspaceId } from '../services/api';
 import { resolvePeriodDates } from '../utils/periodDates';
 import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer } from 'recharts';
 
@@ -29,14 +29,28 @@ export default function CashflowReport() {
 
   const load = useCallback(() => {
     const guid = selectedCompany?.guid;
+    const stamp = workspaceStamp();
+    const identity = `${getWorkspaceId() || ''}|${guid || ''}|${selectedFY?.startDate || ''}|${period}`;
+    setCf(null);
     if (!guid) return;
     setLoading(true);
     setError('');
     const { from, to } = resolvePeriodDates(period, { from: selectedFY?.startDate, to: selectedFY?.endDate });
     api.fetchCashflow(guid, period, from, to)
-      .then(setCf)
-      .catch(e => { setCf(null); setError(e?.message || 'Failed to load cashflow'); })
-      .finally(() => setLoading(false));
+      .then((data) => {
+        if (!isWorkspaceCurrent(stamp)) return;
+        setCf(data);
+      })
+      .catch(e => {
+        if (!isWorkspaceCurrent(stamp)) return;
+        setCf(null);
+        setError(e?.message || 'Failed to load cashflow');
+      })
+      .finally(() => {
+        if (!isWorkspaceCurrent(stamp)) return;
+        setLoading(false);
+      });
+    return identity;
   }, [selectedCompany?.guid, selectedFY?.startDate, selectedFY?.endDate, period]);
 
   useEffect(() => { load(); }, [load]);

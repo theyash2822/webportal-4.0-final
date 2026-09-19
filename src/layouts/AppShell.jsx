@@ -302,7 +302,7 @@ export default function AppShell() {
 
   useEffect(() => {
     if (selectedCompany?.guid) refreshNotifs();
-  }, [selectedCompany?.guid, refreshNotifs]);
+  }, [selectedCompany?.guid, currentWorkspace?.id, refreshNotifs]);
   const company = selectedCompany || companies[0];
   const years = company?.years || [];
   const fy = selectedFY || years[0];

@@ -2,12 +2,13 @@
  * Team & Access — Web MD §15–23 (Members, Roles editor, Activity, Data Access).
  * Uses kit Modal/Card/Button; capability registry from backend (no hardcoded role names).
  */
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState, useRef } from 'react';
 import { Users, Shield, Activity } from 'lucide-react';
 import { Card, Button, Input, Modal, useLabelT } from '../../components/kit';
 import { useWorkspace } from '../../contexts/WorkspaceContext';
 import { useAuth } from '../../contexts/AuthContext';
-import api from '../../services/api';
+import api, { workspaceStamp, isWorkspaceCurrent } from '../../services/api';
+import { isEventForActiveWorkspace } from '../../utils/workspaceEvents';
 import { partyCategory } from '../../utils/partyCategory.js';
 import wsService from '../../services/websocket';
 
@@ -210,6 +211,7 @@ export function SettingsTeamAccess() {
   const [changeRoleMember, setChangeRoleMember] = useState(null);
   const [changeRoleId, setChangeRoleId] = useState('');
   const [removingUserId, setRemovingUserId] = useState(null);
+  const inviteInFlight = useRef(false);
 
   const wsId = currentWorkspace?.id;
   const memberUserId = (m) => m?.user_id ?? m?.userId ?? null;
@@ -237,6 +239,9 @@ export function SettingsTeamAccess() {
 
   const load = useCallback(async () => {
     if (!wsId) return;
+    const stamp = workspaceStamp();
+    setMembers([]);
+    setAudit([]);
     setState((s) => ({ ...s, loading: true, error: '' }));
     try {
       const [m, r, a, ctx, seatRes, reg] = await Promise.all([
@@ -247,6 +252,7 @@ export function SettingsTeamAccess() {
         api.fetchWorkspaceSeats(wsId).catch(() => ({ data: [] })),
         api.fetchCapabilityRegistry().catch(() => ({ data: { capabilities: [], sensitivePolicies: [] } })),
       ]);
+      if (!isWorkspaceCurrent(stamp)) return;
       setMembers(unwrap(m) || []);
       const roleList = unwrap(r) || [];
       setRoles(roleList);
@@ -269,12 +275,16 @@ export function SettingsTeamAccess() {
 
   useEffect(() => {
     if (!wsId) return undefined;
-    const refresh = () => {
+    const refresh = (data) => {
+      if (data && !isEventForActiveWorkspace(data, wsId)) return;
+      const stamp = workspaceStamp();
       api.fetchWorkspaceAudit(wsId).then((res) => {
+        if (!isWorkspaceCurrent(stamp)) return;
         setAudit(unwrap(res) || []);
       }).catch(() => {});
       if (tab === 'members') {
         api.fetchWorkspaceMembers(wsId).then((res) => {
+          if (!isWorkspaceCurrent(stamp)) return;
           setMembers(unwrap(res) || []);
         }).catch(() => {});
       }
@@ -501,6 +511,7 @@ export function SettingsTeamAccess() {
   };
 
   const invite = async () => {
+    if (inviteInFlight.current) return;
     if (!wsId || !can('members.invite')) {
       setState((s) => ({ ...s, error: lt('Not allowed. Ask your Workspace administrator.') }));
       return;
@@ -516,6 +527,7 @@ export function SettingsTeamAccess() {
       console.warn('[TeamAccess] No AVAILABLE paid seat — invite may fail or join without seat.');
     }
     setState((s) => ({ ...s, message: '', error: '' }));
+    inviteInFlight.current = true;
     try {
       await api.createWorkspaceInvitation(wsId, {
         mobile: inviteMobile,
@@ -551,6 +563,8 @@ export function SettingsTeamAccess() {
       await reloadWorkspaces?.();
     } catch (err) {
       setState((s) => ({ ...s, error: err?.data?.error?.message || err.message || 'Invite failed' }));
+    } finally {
+      inviteInFlight.current = false;
     }
   };
 
