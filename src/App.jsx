@@ -202,11 +202,13 @@ export default function App() {
                   <Route path="ledgers" element={<Cap anyOf={[NAV_CAP.Ledgers]}><M.Ledgers /></Cap>} />
                   <Route path="ai-insights" element={<Cap anyOf={[NAV_CAP['AI Insights']]}><M.AIInsights /></Cap>} />
 
+                  {/* COMPATIBILITY-BLOCK: /notifications deep links land on dashboard until a dedicated inbox exists. */}
                   <Route path="notifications" element={<Navigate to="/" replace />} />
                   <Route path="daybook" element={<Navigate to="/audit-trail/daybook" replace />} />
                   <Route path="compliance/daybook" element={<Navigate to="/audit-trail/daybook" replace />} />
                   <Route path="compliance/audit-trail" element={<Navigate to="/audit-trail" replace />} />
                   <Route path="expenses/register" element={<Navigate to="/expenses" replace />} />
+                  {/* COMPATIBILITY-BLOCK: old party/ledger detail URLs redirect to the live list screens. */}
                   <Route path="parties/:id" element={<Navigate to="/parties" replace />} />
                   <Route path="ledgers/:id" element={<Navigate to="/ledgers" replace />} />
 

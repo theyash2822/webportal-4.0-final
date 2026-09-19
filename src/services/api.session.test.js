@@ -106,10 +106,11 @@ describe('refresh on 401', () => {
       api.fetchBillingOverview(),
       api.fetchMyInvitations(),
       api.fetchTallySyncStatus(),
+      api.fetchMyWorkspaces(),
     ]);
 
     expect(refreshCalls).toBe(1);
-    expect(results).toHaveLength(4);
+    expect(results).toHaveLength(5);
     results.forEach((r) => expect(r.success).toBe(true));
     expect(onUnauthorized).not.toHaveBeenCalled();
   });
@@ -174,6 +175,29 @@ describe('403 is not session expiry', () => {
     expect(onUnauthorized).not.toHaveBeenCalled();
     expect(getAuthToken()).toBe('access-1');
     expect(getRefreshToken()).toBe('refresh-1');
+  });
+});
+
+describe('422 is domain validation', () => {
+  it('surfaces a human message and never signs out', async () => {
+    const fetchMock = vi.fn(async () => jsonResponse(422, {
+      success: false,
+      error: { code: 'PARTY_LEDGER_NOT_FOUND', message: 'Party ledger was not found in this company.' },
+    }));
+    vi.stubGlobal('fetch', fetchMock);
+    setAuthToken('access-1');
+    setRefreshToken('refresh-1');
+
+    await expect(api.createPartyInTally({ name: 'Acme' })).rejects.toMatchObject({
+      status: 422,
+      kind: 'validation',
+      message: 'Party ledger was not found in this company.',
+    });
+    expect(onUnauthorized).not.toHaveBeenCalled();
+    expect(getAuthToken()).toBe('access-1');
+    const thrown = await api.createPartyInTally({ name: 'Acme' }).catch((e) => e);
+    expect(String(thrown.message)).not.toMatch(/\{/);
+    expect(String(thrown.message)).not.toMatch(/HTTP 422/);
   });
 });
 

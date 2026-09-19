@@ -52,6 +52,7 @@ vi.mock('../services/websocket', () => ({ default: socket.service }));
 vi.mock('../services/push', () => ({
   tryAutoRegisterPush: vi.fn().mockResolvedValue(null),
   registerWebPushToken: vi.fn(),
+  unregisterWebPushToken: vi.fn().mockResolvedValue(undefined),
   getPushPermissionStatus: vi.fn(),
 }));
 vi.mock('../services/api', async () => {
@@ -326,3 +327,103 @@ describe('switching workspaces drops the previous permissions', () => {
     expect(getWorkspaceId()).toBe('ws-ABC');
   });
 });
+
+describe('RECONNECTING stays on real books', () => {
+  it('does not filter to Demo when the selected workspace is RECONNECTING', async () => {
+    await mountAuth();
+    net.fetchCompaniesHydrated.mockResolvedValue([
+      { guid: 'D', name: 'Canonical Demo', is_demo: true, years: [] },
+      { guid: 'R', name: 'Demo Traders', is_demo: false, years: [] },
+    ]);
+
+    await act(async () => {
+      socket.emit('tally_connection', { status: 'RECONNECTING', workspaceId: 'ws-ABC' });
+    });
+    await waitFor(() => expect(auth().isWorkspacePaired('ws-ABC')).toBe(true));
+    await waitFor(() => expect(auth().companies.some((c) => c.guid === 'R')).toBe(true));
+    expect(auth().companies.some((c) => c.guid === 'D')).toBe(true);
+  });
+});
+
+describe('same GUID across workspaces', () => {
+  it('does not write a global selectedCompany key', async () => {
+    await mountAuth();
+    net.fetchCompaniesHydrated.mockResolvedValue([
+      { guid: 'G', name: 'ABC Co', is_demo: false, years: [{ uniqueId: 'G_2025', finYear: '2025-2026', startDate: '2025-04-01', endDate: '2026-03-31' }] },
+    ]);
+    await act(async () => {
+      await auth().loadCompanies({ demoOnly: false });
+    });
+    expect(localStorage.getItem('selectedCompany')).toBeNull();
+    expect(localStorage.getItem('selectedFY')).toBeNull();
+  });
+});
+
+describe('logout clears navigation residue', () => {
+  it('calls server logout and clears postAuthPath', async () => {
+    sessionStorage.setItem('td.postAuthPath', '/settings/tally-sync');
+    localStorage.setItem('td_push_token', 'web-push-1');
+    await mountAuth();
+    await act(async () => { await auth().logout(); });
+    expect(sessionStorage.getItem('td.postAuthPath')).toBeNull();
+    expect(auth().token).toBeNull();
+  });
+});
+
+describe('membership events are workspace-gated', () => {
+  it('ignores membership_revoked for another workspace', async () => {
+    net.fetchMyWorkspaces.mockResolvedValue({
+      data: [{ id: 'ws-ABC', isBase: true }, { id: 'ws-XYZ' }],
+    });
+    net.fetchWorkspaceContext.mockResolvedValue({
+      data: {
+        workspace: { id: 'ws-ABC', name: 'ABC' },
+        access: { membershipType: 'MEMBER', capabilities: ['reports.view'] },
+        pairing: { status: 'CONNECTED' },
+      },
+    });
+    await act(async () => {
+      render(
+        <AuthProvider>
+          <WorkspaceProvider><WorkspaceProbe /></WorkspaceProvider>
+        </AuthProvider>,
+      );
+    });
+    await waitFor(() => expect(workspace().currentWorkspace?.id).toBe('ws-ABC'));
+
+    await act(async () => {
+      socket.emit('membership_revoked', { workspaceId: 'ws-XYZ', message: 'removed from XYZ' });
+    });
+    expect(workspace().currentWorkspace?.id).toBe('ws-ABC');
+    expect(auth().token).toBe('access-1');
+  });
+
+  it('ignores a membership event that names no workspace', async () => {
+    net.fetchMyWorkspaces.mockResolvedValue({
+      data: [{ id: 'ws-ABC', isBase: true }],
+    });
+    net.fetchWorkspaceContext.mockResolvedValue({
+      data: {
+        workspace: { id: 'ws-ABC', name: 'ABC' },
+        access: { membershipType: 'MEMBER', capabilities: ['reports.view'] },
+        pairing: { status: 'CONNECTED' },
+      },
+    });
+    await act(async () => {
+      render(
+        <AuthProvider>
+          <WorkspaceProvider><WorkspaceProbe /></WorkspaceProvider>
+        </AuthProvider>,
+      );
+    });
+    await waitFor(() => expect(workspace().currentWorkspace?.id).toBe('ws-ABC'));
+    const tokenBefore = auth().token;
+    await act(async () => {
+      socket.emit('workspace_access_denied', {});
+      socket.emit('membership_changed', {});
+    });
+    expect(auth().token).toBe(tokenBefore);
+    expect(workspace().currentWorkspace?.id).toBe('ws-ABC');
+  });
+});
+

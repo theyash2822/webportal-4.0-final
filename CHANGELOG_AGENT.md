@@ -4,6 +4,19 @@ Format: Date | Task | Files Changed | Behavior Changed | Tested | Risks
 
 ---
 
+## 2026-09-19 | Web production remediations — tenant isolation, Demo model, sockets
+Files: Auth/Workspace/Settings contexts, `api.js`, websocket, Dashboard/Cashflow/Compliance/TeamAccess/financials, create forms, notifications, tests
+- Company/FY persistence is user+workspace / user+workspace+company. Global `selectedCompany` / `selectedFY` / `companies` are no longer tenant authority and are deleted, not adopted.
+- Demo identity is `companies.is_demo` only. RECONNECTING stays on real books. Canonical Demo writes go to `/api/demo/entries`, never `/tally/*`.
+- Tenant socket events require `workspaceId`. Wrong/missing workspace is ignored. `workspace_access_denied` / membership revoke clear the current tenant and switch to another workspace without logging the account out.
+- Authenticated Settings/Compliance raw `fetch` moved onto `apiRequest` (refresh single-flight + 401 replay). HTTP 422 is classified as domain validation. Stock create sends the entered HSN. `useSubmit` is single-flight and allows Demo creates.
+- Logout sends `pushToken` on `POST /api/auth/logout`, unregisters the web push token, and clears `td.postAuthPath`.
+- Removed unused `pairWithTally` / `unpairTally` / `GET /tally/audit-trail` wrappers. Web `/app` request callers remain 0.
+- Tested: `npm test` → 13 files / 74 tests PASS. `npm run build` PASS. Main chunk ~3.14 MB / 811 kB gzip.
+- Risks: sessionStorage tokens remain XSS-readable (SECURITY-BLOCK; needs HttpOnly cookie contract). Main bundle not split (P2). Lint 288/59 mostly pre-existing style/compiler rules.
+
+---
+
 ## 2026-09-18 | Workspace isolation (pairing, socket events, late responses) + central 401 refresh
 Files: `src/contexts/AuthContext.jsx`, `src/contexts/WorkspaceContext.jsx`, `src/services/api.js`, `src/utils/authStorage.js`, `src/utils/stockCache.js`, `src/utils/workspaceEvents.js` (new), `src/layouts/AppShell.jsx`, `src/pages/Dashboard.jsx`, `src/pages/Settings.jsx`, `src/pages/auth/Login.jsx`, plus 4 test files
 - Removed the user-global `isPaired` state and the `localStorage['isPaired']`

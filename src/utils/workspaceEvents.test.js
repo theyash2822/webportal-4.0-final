@@ -43,4 +43,10 @@ describe('workspace-scoped socket events', () => {
     expect(eventWorkspaceId({ workspace_id: 'b' })).toBe('b');
     expect(eventWorkspaceId({})).toBeNull();
   });
+
+  it('drops voucher:tallySynced for the wrong or missing workspace', () => {
+    expect(isEventForActiveWorkspace({ tdkRef: 'TD1', workspaceId: 'ws-XYZ' })).toBe(false);
+    expect(isEventForActiveWorkspace({ tdkRef: 'TD1' })).toBe(false);
+    expect(isEventForActiveWorkspace({ tdkRef: 'TD1', workspaceId: 'ws-ABC' })).toBe(true);
+  });
 });
