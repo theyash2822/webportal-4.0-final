@@ -8,5 +8,11 @@ export function creditsToInrDisplay(credits) {
 }
 
 export function isInsufficientCreditsError(code, status) {
-  return status === 402 || /INSUFFICIENT/.test(String(code || ''));
+  const c = String(code || '');
+  return (
+    status === 402
+    || /INSUFFICIENT/.test(c)
+    || c === 'MIXED_FUNDING_PRIORITY_UNDEFINED'
+    || c === 'SPLIT_FUNDING_RULE_UNDEFINED'
+  );
 }
