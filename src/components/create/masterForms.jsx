@@ -267,7 +267,7 @@ export function StockItemForm({ onClose, onCreated }) {
   const lt = useLabelT();
   const { company, opt } = useCreateData(['stockGroups', 'stockUnits', 'warehouses']);
   const submit = useSubmit();
-  const [form, setForm] = useState({ group: '', name: '', unit: '', rate: '', purchase: '', warehouse: '', qty: '', sale: '' });
+  const [form, setForm] = useState({ group: '', name: '', unit: '', rate: '', purchase: '', warehouse: '', qty: '', sale: '', hsn: '' });
   const [barcode, setBarcode] = useState(false);
   const [labels, setLabels] = useState({ itemName: true, sku: false, salePrice: false });
   const set = (k, v) => setForm(x => ({ ...x, [k]: v }));
@@ -278,7 +278,7 @@ export function StockItemForm({ onClose, onCreated }) {
     const rate = num(form.rate);
     const result = await submit.run(() => api.createStockItemInTally({
       companyGuid: company?.guid, companyName: company?.name || '', groupName: form.group,
-      name: form.name.trim(), unit: form.unit || 'Nos', hsnCode: '',
+      name: form.name.trim(), unit: form.unit || 'Nos', hsnCode: form.hsn.trim(),
       igstRate: rate, cgstRate: rate / 2, sgstRate: rate / 2,
       openingRate: num(form.purchase), warehouse: form.warehouse || '',
       openingQty: num(form.qty), salePrice: num(form.sale),
@@ -293,6 +293,7 @@ export function StockItemForm({ onClose, onCreated }) {
       <Field label="Group *"><SearchSelect value={form.group} onChange={v => set('group', v)} options={namesOf(opt.stockGroups)} required testid="stock-item-group" /></Field>
       <Field label="Product name *"><Input value={form.name} onChange={e => set('name', e.target.value)} data-testid="stock-item-name" /></Field>
       <Field label="Unit of measure *"><SearchSelect value={form.unit} onChange={v => set('unit', v)} options={namesOf(opt.stockUnits)} required testid="stock-item-unit" /></Field>
+      <Field label="HSN / SAC"><Input value={form.hsn} onChange={e => set('hsn', e.target.value.toUpperCase())} data-testid="stock-item-hsn" /></Field>
       <Field label="Tax rate %"><Input type="number" min="0" step="any" value={form.rate} onChange={e => set('rate', e.target.value)} data-testid="stock-item-tax-rate" /></Field>
     </div></FormSection>
     <FormSection title="Opening stock & pricing"><div className="grid grid-cols-1 gap-3 sm:grid-cols-2">

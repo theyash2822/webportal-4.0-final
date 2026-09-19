@@ -4,6 +4,7 @@ import {
   fetchNotifications,
   markNotificationRead as apiMarkRead,
   markAllNotificationsRead as apiMarkAllRead,
+  getWorkspaceId,
 } from './api';
 
 const CATEGORY_ALIASES = {
@@ -61,14 +62,21 @@ let items = [];
 let loading = false;
 let error = '';
 let lastCompanyGuid = null;
+let lastWorkspaceId = null;
+
+function notificationScope(companyGuid) {
+  return `${getWorkspaceId() || ''}:${companyGuid || ''}`;
+}
 const listeners = new Set();
 
 const emit = () => listeners.forEach((l) => l({ items, loading, error }));
 
 async function load(companyGuid) {
+  const scope = notificationScope(companyGuid);
   if (!companyGuid) {
     items = [];
     lastCompanyGuid = null;
+    lastWorkspaceId = null;
     error = '';
     emit();
     return;
@@ -76,17 +84,22 @@ async function load(companyGuid) {
   loading = true;
   error = '';
   lastCompanyGuid = companyGuid;
+  lastWorkspaceId = getWorkspaceId();
   emit();
   try {
     const res = await fetchNotifications(companyGuid);
+    if (notificationScope(companyGuid) !== scope) return;
     const data = Array.isArray(res?.data) ? res.data : (Array.isArray(res) ? res : []);
     items = data.map(normalizeNotification);
   } catch (e) {
+    if (notificationScope(companyGuid) !== scope) return;
     error = e?.message || 'Failed to load notifications';
     items = [];
   } finally {
-    loading = false;
-    emit();
+    if (notificationScope(companyGuid) === scope) {
+      loading = false;
+      emit();
+    }
   }
 }
 
@@ -101,7 +114,9 @@ export function useNotifications(companyGuid) {
   }, []);
 
   useEffect(() => {
-    if (companyGuid && companyGuid !== lastCompanyGuid) load(companyGuid);
+    const ws = getWorkspaceId();
+    const sameScope = companyGuid === lastCompanyGuid && ws === lastWorkspaceId;
+    if (companyGuid && !sameScope) load(companyGuid);
     if (!companyGuid && lastCompanyGuid) load(null);
   }, [companyGuid]);
 

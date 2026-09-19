@@ -1,12 +1,10 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { Plus } from 'lucide-react';
-import api, { API_ROOT, apiGet, unwrapList } from '../services/api';
+import api, { apiGet, apiRequest, unwrapList, workspaceStamp, isWorkspaceCurrent } from '../services/api';
 import { useAuth } from '../contexts/AuthContext';
 import { StatGrid, Button, Panel, DataTable, TableFilter, Pill, Status, Tabs, Modal, Field, Input, Select, ModuleView, Empty, Skeleton, useLabelT } from '../components/kit';
 import { useFmt, RecordDrawer, useVoucherSelection, BulkActionBar, voucherRowKey } from './shared';
 import { useSalesContext } from '../contexts/SalesContext';
-import { getAuthToken } from '../utils/authStorage';
-
 const number = value => Number(value || 0);
 const dataOf = res => res?.data ?? res?.result ?? res ?? {};
 const companyId = company => company?.guid || company?.id;
@@ -20,13 +18,7 @@ function queryPath(path, guid, fy, extra = {}) {
 }
 
 async function rootPost(path, body) {
-  const headers = { 'Content-Type': 'application/json' };
-  const token = getAuthToken();
-  if (token) headers.Authorization = `Bearer ${token}`;
-  const res = await fetch(`${API_ROOT}${path}`, { method: 'POST', headers, body: JSON.stringify(body) });
-  const payload = await res.json().catch(() => ({}));
-  if (!res.ok) throw new Error(payload?.error?.message || payload?.message || `HTTP ${res.status}`);
-  return payload;
+  return apiRequest('POST', path, body);
 }
 
 function useLive(loadFn) {
@@ -45,14 +37,23 @@ function useLive(loadFn) {
 
   const [state, setState] = useState({ data: null, loading: true, error: '' });
   const load = useCallback(() => {
+    const stamp = workspaceStamp();
+    const identity = `${guid || ''}|${effectiveFY?.startDate || ''}|${effectiveFY?.endDate || ''}|${effectiveFY?.fin_year || ''}`;
     if (!guid) {
       setState({ data: null, loading: false, error: 'Select a company to view compliance data.' });
       return;
     }
-    setState(s => ({ ...s, loading: true, error: '' }));
+    setState({ data: null, loading: true, error: '' });
     Promise.resolve(loadFn(guid, effectiveFY))
-      .then(data => setState({ data, loading: false, error: '' }))
-      .catch(err => setState({ data: null, loading: false, error: err.message || 'Unable to load compliance data.' }));
+      .then(data => {
+        if (!isWorkspaceCurrent(stamp)) return;
+        setState({ data, loading: false, error: '' });
+      })
+      .catch(err => {
+        if (!isWorkspaceCurrent(stamp)) return;
+        setState({ data: null, loading: false, error: err.message || 'Unable to load compliance data.' });
+      });
+    return identity;
   }, [guid, effectiveFY, loadFn]);
   useEffect(load, [load, syncVersion]);
   return { ...state, retry: load, guid, fy: effectiveFY };

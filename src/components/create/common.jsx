@@ -7,6 +7,8 @@ import { ChevronDown, Plus, Trash2, Search } from 'lucide-react';
 import { Field, Input, Select, Button, Toggle, useLabelT } from '../kit';
 import { useAuth } from '../../contexts/AuthContext';
 import { useWorkspace } from '../../contexts/WorkspaceContext';
+import { isDemoCompany } from '../../utils/isDemoCompany';
+import { fyKey } from '../../utils/fyIdentity';
 import api from '../../services/api';
 import BarcodeGunInput from '../BarcodeGunInput';
 import { readStockCache, writeStockCache } from '../../utils/stockCache';
@@ -27,17 +29,13 @@ const LOADERS = {
   partiesExpense:  g => api.fetchParties({ companyGuid: g, pageSize: 500, type: 'expense' }),
   partiesIncome:   g => api.fetchParties({ companyGuid: g, pageSize: 500, type: 'income' }),
   ledgers:         g => api.fetchLedgers({ companyGuid: g, pageSize: 2000, limit: 2000 }),
-  items:           async g => {
-    let fyKey = 'fy';
-    try {
-      const fy = JSON.parse(localStorage.getItem('selectedFY') || 'null');
-      fyKey = fy?.uniqueId || fy?.name || 'fy';
-    } catch { /* ignore */ }
-    const cached = readStockCache(g, fyKey);
+  items:           async (g, fy) => {
+    const cacheKey = fyKey(fy) || 'fy';
+    const cached = readStockCache(g, cacheKey);
     if (cached?.length) return cached;
     const res = await api.fetchStocks({ companyGuid: g, pageSize: 2000, limit: 2000 });
     const list = api.unwrapList(res) || [];
-    if (list.length) writeStockCache(g, fyKey, list);
+    if (list.length) writeStockCache(g, cacheKey, list);
     return list;
   },
   warehouses:      g => api.fetchWarehouses(g),
@@ -75,7 +73,7 @@ function assignLoaderResult(opt, key, result) {
 
 export function useCreateData(keys) {
   // Same fallback as AppShell's top bar: an implicit first company counts as selected.
-  const { selectedCompany, companies } = useAuth();
+  const { selectedCompany, companies, selectedFY } = useAuth();
   const company = selectedCompany || (companies && companies[0]) || null;
   const guid = company?.guid;
   const [state, setState] = useState({ loading: true, error: '', opt: {} });
@@ -86,7 +84,7 @@ export function useCreateData(keys) {
     let alive = true;
     setState(s => ({ ...s, loading: true, error: '' }));
     const ks = keyStr.split(',').filter(Boolean);
-    Promise.all(ks.map(k => LOADERS[k](guid).then(r => ({ ok: true, r })).catch(e => ({ ok: false, e }))))
+    Promise.all(ks.map(k => LOADERS[k](guid, selectedFY).then(r => ({ ok: true, r })).catch(e => ({ ok: false, e }))))
       .then(results => {
         if (!alive) return;
         const opt = {};
@@ -102,7 +100,7 @@ export function useCreateData(keys) {
         });
       });
     return () => { alive = false; };
-  }, [guid, keyStr, retryN]);
+  }, [guid, keyStr, retryN, selectedFY?.uniqueId, selectedFY?.finYear]);
   return { ...state, company, retry: () => setRetryN(n => n + 1) };
 }
 
@@ -766,15 +764,19 @@ export const billAllocationsPayload = (allocations, amount, remainderMode) => {
 /* ── Submit plumbing shared by every form ─────────────────────────────────── */
 export function useSubmit() {
   const lt = useLabelT();
-  const { pairingStatus } = useWorkspace();
+  const { pairingStatus, selectedCompany } = useWorkspace();
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState('');
   const [done, setDone] = useState(null);
+  const inFlight = useRef(false);
   const run = useCallback(async fn => {
-    if (String(pairingStatus || '').toUpperCase() !== 'CONNECTED') {
+    if (inFlight.current) return null;
+    const demo = isDemoCompany(selectedCompany);
+    if (!demo && String(pairingStatus || '').toUpperCase() !== 'CONNECTED') {
       setError(lt('Connect Tally and complete the first sync before creating live entries.'));
       return null;
     }
+    inFlight.current = true;
     setError(''); setSaving(true);
     try {
       const res = await fn();
@@ -790,9 +792,10 @@ export function useSubmit() {
       setError(e?.message || lt('Unable to submit to Tally'));
       return null;
     } finally {
+      inFlight.current = false;
       setSaving(false);
     }
-  }, [pairingStatus, lt]);
+  }, [pairingStatus, selectedCompany, lt]);
   return { saving, error, setError, done, run };
 }
 
@@ -819,7 +822,7 @@ export function DoneState({ done, title, companyGuid, onViewDocument }) {
     setShareMsg('');
     try {
       await api.shareTallyInvoicePdf(tdkRef, { companyGuid });
-      window.open(`https://wa.me/?text=${encodeURIComponent(`${title || 'Invoice'} ${tdkRef}`)}`, '_blank', 'noopener');
+      window.open(`https://wa.me/?text=${encodeURIComponent(`${title || 'Invoice'} ${tdkRef}`)}`, '_blank', 'noopener,noreferrer');
       setShareMsg(lt('Share PDF requested'));
     } catch (e) {
       setShareMsg(e?.message || lt('Share PDF failed'));

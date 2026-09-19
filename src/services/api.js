@@ -1,5 +1,5 @@
 // API Service — mirrors mobile app's apiService.js exactly
-// Auth + live reads: /api/* (mobile V2). Legacy writes: /app/*.
+// Auth + live reads: /api/*. Writes: /tally/* or private /api/demo/entries.
 
 import { API_ROOT, WS_URL } from './config.js';
 import {
@@ -56,7 +56,7 @@ function attachWorkspaceHeader(headers, { skipWorkspace = false } = {}) {
   return headers;
 }
 
-/** 403 CAPABILITY_DENIED / SCOPE_* → friendly UX; never clears token. */
+/** 403 CAPABILITY_DENIED / SCOPE_* → friendly UX; never clears token. 422 is domain validation. */
 function throwHttpError(res, body = {}) {
   const code = body?.error?.code || body?.code || '';
   const rawMsg = body?.error?.message || body?.message || '';
@@ -68,15 +68,24 @@ function throwHttpError(res, body = {}) {
     || msgStr === 'CAPABILITY_DENIED'
     || msgStr.startsWith('SCOPE_')
   );
+  const isValidation = res.status === 422;
   // Do not clear authToken / call logout — capability/scope denials are not session expiry.
   const message = isCapOrScope
     ? 'Not allowed. Ask your Workspace administrator.'
-    : (rawMsg || `HTTP ${res.status}`);
+    : isValidation
+      ? (rawMsg || humanizeValidationCode(codeStr) || 'Please check the form and try again.')
+      : (rawMsg || `Request failed (${res.status})`);
   throw Object.assign(new Error(message), {
     status: res.status,
     data: body,
     code: codeStr || undefined,
+    kind: isValidation ? 'validation' : (isCapOrScope ? 'permission' : undefined),
   });
+}
+
+function humanizeValidationCode(code) {
+  if (!code) return '';
+  return String(code).replace(/_/g, ' ').replace(/\b\w/g, (c) => c.toUpperCase());
 }
 
 // ─── Session: refresh-on-401 ─────────────────────────────────────────────────
@@ -201,7 +210,7 @@ async function apiRequest(method, path, body = null, opts = {}) {
   }
 }
 
-/** Normalize mobile `/api/auth/*` envelopes (also accepts legacy /app field names). */
+/** Normalize mobile `/api/auth/*` envelopes (also accepts older field aliases). */
 export function unwrapAuth(res) {
   const d = res?.data ?? {};
   return {
@@ -320,7 +329,7 @@ function readParams(body = {}) {
   };
 }
 
-/** Legacy POST /app/vouchers fallback removed in Phase 5 — canonical GET /api only */
+/** Register / voucher reads — GET /api/* only */
 async function fetchRegisterOrVouchers(apiPath, companyGuid, params, voucherType) {
   const apiParams = {
     from: params?.from || params?.fromDate,
@@ -373,12 +382,21 @@ export const registerPushToken = (body) => apiRequest('POST', '/api/push-token',
 export const removePushToken = (body = {}) => apiRequest('DELETE', '/api/push-token', body);
 
 // ─── Companies (same /api/companies + /api/company/years as mobile V4) ───────
-/** Map GET /api/companies row → { guid, name, gstin, years? } */
+/** Map GET /api/companies row → portal company. `is_demo` is the only Demo flag. */
 export function normalizeApiCompany(row) {
   if (!row) return null;
-  const guid = row.guid || row.id;
+  const guid = row.guid || row.tally_guid;
   if (!guid) return null;
-  return { guid, name: row.name, gstin: row.gstin ?? null, years: row.years || [] };
+  return {
+    id: row.id ?? null,
+    guid,
+    name: row.name,
+    gstin: row.gstin ?? null,
+    years: row.years || [],
+    is_demo: !!(row.is_demo ?? row.isDemo),
+    isDemo: !!(row.is_demo ?? row.isDemo),
+    is_active: row.is_active !== false,
+  };
 }
 
 export function normalizeApiCompanies(res) {
@@ -462,16 +480,6 @@ export async function fetchCompaniesHydrated({ bearer, forGuid } = {}) {
 
 // ─── Pairing (same /api/tally-sync/* as mobile) ──────────────────────────────
 export const fetchTallySyncStatus = () => apiGet('/api/tally-sync/status');
-/** @deprecated Use pairWorkspaceTally — legacy route returns 410. */
-export const pairWithTally = () =>
-  Promise.reject(Object.assign(new Error('Use pairWorkspaceTally(workspaceId, code)'), {
-    code: 'PAIRING_API_DEPRECATED',
-  }));
-/** @deprecated Use unpairWorkspaceTally — legacy route returns 410. */
-export const unpairTally = () =>
-  Promise.reject(Object.assign(new Error('Use unpairWorkspaceTally(workspaceId)'), {
-    code: 'PAIRING_API_DEPRECATED',
-  }));
 export const pairWorkspaceTally = (workspaceId, pairingCode) =>
   apiRequest('POST', `/api/workspaces/${encodeURIComponent(workspaceId)}/tally/pair`, {
     pairing_code: String(pairingCode || '').trim(),
@@ -755,7 +763,7 @@ export const fetchDaybook = (companyGuid, params = {}) =>
     limit: params.limit || params.pageSize || 500,
   }));
 
-// Register helpers — GET /api/* only (Phase 5: no /app/vouchers fallback)
+// Register helpers — GET /api/* only
 export const fetchSalesInvoices = (companyGuid, params = {}) =>
   fetchRegisterOrVouchers('/api/sales/invoices', companyGuid, params, 'Sales');
 export const fetchSalesOrders = (companyGuid, params = {}) =>
@@ -997,8 +1005,37 @@ export const fetchKpiPayments = (companyGuid, params = {}) =>
 export const fetchKpiReceipts = (companyGuid, params = {}) =>
   fetchKpiDetail('receipts', { companyGuid, ...params });
 
+/** When the selected company is canonical Demo, writes go to /api/demo/entries — never write_queue. */
+let _writeAsDemo = false;
+export function setWriteAsDemo(enabled) {
+  _writeAsDemo = !!enabled;
+}
+export function getWriteAsDemo() {
+  return _writeAsDemo;
+}
+
+const DEMO_ENTRY_TYPES = new Set([
+  'sales_invoice', 'purchase_invoice', 'payment', 'receipt', 'journal',
+  'contra', 'credit_note', 'debit_note', 'ledger', 'stock_item',
+]);
+
+export function resolveWriteTarget(writeAsDemo, tallyEndpoint, demoEntryType) {
+  if (writeAsDemo && demoEntryType && DEMO_ENTRY_TYPES.has(demoEntryType)) {
+    return { prefix: 'api', endpoint: '/api/demo/entries', demo: true, entryType: demoEntryType };
+  }
+  return { prefix: 'tally', endpoint: tallyEndpoint, demo: false };
+}
+
+export const createDemoEntry = (entryType, payload) =>
+  apiRequest('POST', '/api/demo/entries', { entryType, payload });
+export const listDemoEntries = () => apiGet('/api/demo/entries');
+export const deleteDemoEntry = (id) => apiRequest('DELETE', `/api/demo/entries/${encodeURIComponent(id)}`);
+export const clearDemoEntries = () => apiRequest('DELETE', '/api/demo/entries');
+
 export const fetchMyEntries = (companyGuid, params = {}) =>
-  apiGet(withCompany('/api/vouchers/my-entries', companyGuid, params));
+  getWriteAsDemo()
+    ? listDemoEntries()
+    : apiGet(withCompany('/api/vouchers/my-entries', companyGuid, params));
 export const retryMyEntry = (id) =>
   apiRequest('POST', `/api/vouchers/my-entries/${id}/retry`, {});
 
@@ -1370,9 +1407,9 @@ export const fetchCashBank = async (body = {}) => {
   };
 };
 
-// ─── User Settings / Company (root /api — not /app/api) ───────────────────────
-export const getUserSettings    = () => apiGet('/api/auth/user-settings');
-export const updateUserSettings = (data) => apiRequest('PATCH', '/api/auth/user-settings', data);
+// ─── User Settings / Company (user-global settings omit workspace header) ────
+export const getUserSettings    = () => apiGet('/api/auth/user-settings', { skipWorkspace: true });
+export const updateUserSettings = (data) => apiRequest('PATCH', '/api/auth/user-settings', data, { skipWorkspace: true });
 
 export const fetchCompanyLogo    = (companyGuid) => apiGet(`/api/company/${companyGuid}/logo`);
 export const uploadCompanyLogo   = (companyGuid, logo) => apiRequest('POST', `/api/company/${companyGuid}/logo`, { logo });
@@ -1506,7 +1543,14 @@ export const fetchOtherTaxesLateChallans = async (body = {}) => {
 };
 
 // ─── Tally Write API (creates vouchers/masters in Tally via desktop proxy) ────
-async function tallyRequest(endpoint, body) {
+async function tallyRequest(endpoint, body, demoEntryType) {
+  const target = resolveWriteTarget(_writeAsDemo, endpoint, demoEntryType);
+  if (target.demo) {
+    return createDemoEntry(target.entryType, body || {});
+  }
+  if (_writeAsDemo) {
+    throw Object.assign(new Error('This action is not available in Demo Mode.'), { kind: 'validation', status: 400 });
+  }
   const res = await authedFetch(`${TALLY_BASE}${endpoint}`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
@@ -1522,28 +1566,25 @@ async function tallyGet(endpoint) {
   return res.json();
 }
 
-export const createSalesInvoice    = (b) => tallyRequest('/tally/voucher/sales',         b);
+export const createSalesInvoice    = (b) => tallyRequest('/tally/voucher/sales',         b, 'sales_invoice');
 export const createSalesOrder      = (b) => tallyRequest('/tally/voucher/sales-order',    b);
-export const createPurchaseInvoice = (b) => tallyRequest('/tally/voucher/purchase',       b);
+export const createPurchaseInvoice = (b) => tallyRequest('/tally/voucher/purchase',       b, 'purchase_invoice');
 export const createPurchaseOrder   = (b) => tallyRequest('/tally/voucher/purchase-order', b);
-export const createPaymentVoucher  = (b) => tallyRequest('/tally/voucher/payment',        b);
-export const createReceiptVoucher  = (b) => tallyRequest('/tally/voucher/receipt',        b);
-export const createJournalVoucher  = (b) => tallyRequest('/tally/voucher/journal',        b);
-export const createContraVoucher   = (b) => tallyRequest('/tally/voucher/contra',         b);
-export const createCreditNote      = (b) => tallyRequest('/tally/voucher/credit-note',    b);
-export const createDebitNote       = (b) => tallyRequest('/tally/voucher/debit-note',     b);
+export const createPaymentVoucher  = (b) => tallyRequest('/tally/voucher/payment',        b, 'payment');
+export const createReceiptVoucher  = (b) => tallyRequest('/tally/voucher/receipt',        b, 'receipt');
+export const createJournalVoucher  = (b) => tallyRequest('/tally/voucher/journal',        b, 'journal');
+export const createContraVoucher   = (b) => tallyRequest('/tally/voucher/contra',         b, 'contra');
+export const createCreditNote      = (b) => tallyRequest('/tally/voucher/credit-note',    b, 'credit_note');
+export const createDebitNote       = (b) => tallyRequest('/tally/voucher/debit-note',     b, 'debit_note');
 export const createDeliveryNote    = (b) => tallyRequest('/tally/voucher/delivery-note',  b);
 export const createProformaInvoice = (b) => tallyRequest('/tally/voucher/proforma', b);
 export const convertProformaInvoice = (b) => tallyRequest('/tally/voucher/proforma/convert', b);
 export const createStockTransfer   = (b) => tallyRequest('/tally/voucher/stock-transfer', b);
 export const createStockAdjustment = (b) => tallyRequest('/tally/voucher/stock-adjustment', b);
-export const fetchAuditTrail = ({ companyGuid, status, limit = 50, offset = 0 } = {}) =>
-  tallyGet(`/tally/audit-trail?companyGuid=${companyGuid}${status ? '&status=' + status : ''}&limit=${limit}&offset=${offset}`);
-export const retryAuditEntry = (id) => tallyRequest(`/tally/audit-trail/${id}/retry`, {});
 export const cancelVoucher         = (b) => tallyRequest('/tally/voucher/cancel',         b);
-export const createPartyInTally    = (b) => tallyRequest('/tally/master/party',           b);
+export const createPartyInTally    = (b) => tallyRequest('/tally/master/party',           b, 'ledger');
 export const createWarehouseInTally= (b) => tallyRequest('/tally/master/warehouse',       b);
-export const createStockItemInTally= (b) => tallyRequest('/tally/master/stock-item',      b);
+export const createStockItemInTally= (b) => tallyRequest('/tally/master/stock-item',      b, 'stock_item');
 export const alterStockItemInTally = (b) => tallyRequest('/tally/master/stock-item-alter', b);
 export const createBankLedgerInTally = (b) => tallyRequest('/tally/master/bank', b);
 
@@ -1563,7 +1604,9 @@ const api = {
   storeAuthSession, setUnauthorizedHandler,
   workspaceStamp, isWorkspaceCurrent,
   // Pairing
-  pairWithTally, fetchTallySyncStatus, unpairTally, pairWorkspaceTally, unpairWorkspaceTally,
+  fetchTallySyncStatus, pairWorkspaceTally, unpairWorkspaceTally,
+  setWriteAsDemo, getWriteAsDemo, resolveWriteTarget,
+  createDemoEntry, listDemoEntries, deleteDemoEntry, clearDemoEntries,
   fetchWorkspaceApprovals, approveHardSync, rejectHardSync, approveWorkspaceRestore,
   fetchMyWorkspaces, fetchWorkspaceContext, patchWorkspace, createWorkspace,
   fetchWorkspaceMembers, fetchWorkspaceRoles, fetchCapabilityRegistry,
@@ -1615,7 +1658,7 @@ const api = {
   fetchSalesVouchers, fetchSalesVoucherCounts, fetchSalesInvoiceCreditNoteContext,
   fetchPurchaseVouchers, fetchPurchaseVoucherCounts, fetchPurchaseInvoiceDebitNoteContext,
   fetchProforma, fetchQuotations, fetchSalesEwaybills, fetchStockAdjustments, fetchDaybook,
-  fetchMyEntries, retryMyEntry, fetchAuditTrail, retryAuditEntry,
+  fetchMyEntries, retryMyEntry,
   sendPaymentReminder, searchGlobal,
   fetchNotifications, markNotificationRead, markAllNotificationsRead,
   lookupBarcode, fetchBarcodesList, generateBarcode, generateBarcodesBulk, linkBarcode,
@@ -1631,5 +1674,5 @@ const api = {
   fetchTallyInvoicePreview, shareTallyInvoicePdf, fetchMasterPreview,
 };
 
-export { WS_URL, API_ROOT, TALLY_BASE, apiGet };
+export { WS_URL, API_ROOT, TALLY_BASE, apiGet, apiRequest };
 export default api;

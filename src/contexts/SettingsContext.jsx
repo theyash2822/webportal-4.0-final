@@ -6,9 +6,10 @@ import {
   getCurrencySymbol,
   DEFAULT_FORMAT_SETTINGS,
 } from '../utils/format';
-import { USE_MOCK, API_ROOT } from '../services/config';
+import { USE_MOCK } from '../services/config';
 import i18n, { languageToCode } from '../i18n';
 import { getAuthToken } from '../utils/authStorage';
+import { getUserSettings, updateUserSettings } from '../services/api';
 
 const DEFAULT_SETTINGS = {
   language: 'English',
@@ -31,7 +32,6 @@ const SettingsContext = createContext({
 
 export function SettingsProvider({ children }) {
   const [settings, setSettings] = useState(() => {
-    /* initial state below; language applied to i18n in the effect */
     try {
       const stored = localStorage.getItem('userSettings');
       return stored ? { ...DEFAULT_SETTINGS, ...JSON.parse(stored) } : DEFAULT_SETTINGS;
@@ -40,14 +40,10 @@ export function SettingsProvider({ children }) {
     }
   });
 
-  // Sync from API on mount (skipped in mock mode — local settings are the source)
   useEffect(() => {
     const token = getAuthToken();
     if (!token || USE_MOCK) return;
-    fetch(`${API_ROOT}/api/auth/user-settings`, {
-      headers: { Authorization: `Bearer ${token}` },
-    })
-      .then(r => r.json())
+    getUserSettings()
       .then(res => {
         if (res?.data) {
           const merged = { ...DEFAULT_SETTINGS, ...res.data };
@@ -58,7 +54,6 @@ export function SettingsProvider({ children }) {
       .catch(() => {});
   }, []);
 
-  // Keep the UI language in sync with the stored preference (mobile parity).
   useEffect(() => {
     i18n.changeLanguage(languageToCode(settings.language));
   }, [settings.language]);
@@ -70,15 +65,8 @@ export function SettingsProvider({ children }) {
     const token = getAuthToken();
     if (!token || USE_MOCK) return;
     try {
-      await fetch(`${API_ROOT}/api/auth/user-settings`, {
-        method: 'PATCH',
-        headers: {
-          Authorization: `Bearer ${token}`,
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify(partial),
-      });
-    } catch {}
+      await updateUserSettings(partial);
+    } catch { /* local preference still applied */ }
   };
 
   const fmtSettings = {

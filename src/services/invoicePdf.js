@@ -248,6 +248,6 @@ export async function sharePdfOrDownload({ blob, filename, text }) {
     }
   }
   downloadBlob(blob, filename);
-  if (text) window.open(`https://wa.me/?text=${encodeURIComponent(text)}`, '_blank', 'noopener');
+  if (text) window.open(`https://wa.me/?text=${encodeURIComponent(text)}`, '_blank', 'noopener,noreferrer');
   return 'downloaded';
 }

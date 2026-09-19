@@ -1,18 +1,42 @@
 // WebSocket Service — mirrors mobile app's websocketService.js
 // Events: synced, unpaired, logout, connect, disconnect
+// Production: never log business/event payloads.
 
 import { io } from 'socket.io-client';
 import { WS_URL } from './api';
 import { getAuthToken } from '../utils/authStorage';
 
+const NATIVE_EVENTS = [
+  'synced', 'paired', 'unpaired', 'tally_connection', 'logout',
+  'voucher:tallySynced', 'workspace_access_denied', 'workspace_registered',
+  'invitation', 'membership_changed', 'membership_revoked', 'access_revoked',
+  'hard_sync_request', 'hard_sync_status', 'restore_request', 'restore_status',
+  'billing_updated', 'workspace_audit', 'invitation_received',
+];
+
+function wsLog(event, extra) {
+  if (!import.meta.env.DEV) return;
+  if (extra) console.info(`[WS] ${event}`, extra);
+  else console.info(`[WS] ${event}`);
+}
+
 class WebSocketService {
   constructor() {
     this.socket = null;
     this.handlers = new Map();
+    this._workspaceId = null;
+    this._bound = false;
   }
 
   connect(token) {
     if (this.socket?.connected) return;
+
+    if (this.socket) {
+      this.socket.removeAllListeners();
+      this.socket.disconnect();
+      this.socket = null;
+      this._bound = false;
+    }
 
     this.socket = io(WS_URL, {
       transports: ['websocket'],
@@ -22,8 +46,7 @@ class WebSocketService {
     });
 
     this.socket.on('connect', () => {
-      console.info('[WS] connected', this.socket.id);
-      // Register as web client (same as mobile's 'register' event)
+      wsLog('connected');
       this.socket.emit('register', { token, type: 'web' });
     });
 
@@ -33,64 +56,21 @@ class WebSocketService {
     });
 
     this.socket.on('connect_error', (err) => {
-      console.warn('[WS] connect_error', err.message);
+      console.warn('[WS] connect_error', err?.message || 'failed');
     });
 
     this.socket.on('disconnect', (reason) => {
-      console.info('[WS] disconnected', reason);
+      wsLog('disconnected', reason);
       this._emit('disconnect', { reason });
     });
 
-    // ── Key events (same as mobile) ────────────────────────────────────────
-    this.socket.on('synced', (data) => {
-      console.info('[WS] synced', data);
-      this._emit('synced', data);
-    });
-
-    // Mobile paired with desktop — web portal needs to update its paired state
-    this.socket.on('paired', (data) => {
-      console.info('[WS] paired', data);
-      this._emit('paired', data);
-    });
-
-    this.socket.on('unpaired', (data) => {
-      console.warn('[WS] unpaired', data);
-      this._emit('unpaired', data);
-    });
-
-    this.socket.on('tally_connection', (data) => {
-      console.info('[WS] tally_connection', data);
-      this._emit('tally_connection', data);
-    });
-
-    this.socket.on('logout', (data) => {
-      console.warn('[WS] logout', data);
-      this._emit('logout', data);
-    });
-
-    this.socket.on('voucher:tallySynced', (data) => {
-      console.info('[WS] voucher:tallySynced', data);
-      this._emit('voucher:tallySynced', data);
-    });
-
-    this.socket.on('workspace_access_denied', (data) => {
-      console.warn('[WS] workspace_access_denied', data);
-      this._emit('workspace_access_denied', data);
-    });
-
-    this.socket.on('workspace_registered', (data) => {
-      this._emit('workspace_registered', data);
-    });
-
-    // MD §39 — invitations / membership / hard-sync / restore / billing refresh
-    ['invitation', 'membership_changed', 'membership_revoked', 'access_revoked',
-      'hard_sync_request', 'hard_sync_status', 'restore_request', 'restore_status', 'billing_updated',
-      'workspace_audit', 'invitation_received'].forEach((evt) => {
+    NATIVE_EVENTS.forEach((evt) => {
       this.socket.on(evt, (data) => {
-        console.info(`[WS] ${evt}`, data);
+        wsLog(evt);
         this._emit(evt, data);
       });
     });
+    this._bound = true;
   }
 
   /**
@@ -120,16 +100,18 @@ class WebSocketService {
 
   disconnect() {
     if (this.socket) {
+      this.socket.removeAllListeners();
       this.socket.disconnect();
       this.socket = null;
+      this._bound = false;
     }
+    this._workspaceId = null;
   }
 
-  // Subscribe to events
   on(event, handler) {
     if (!this.handlers.has(event)) this.handlers.set(event, new Set());
     this.handlers.get(event).add(handler);
-    return () => this.handlers.get(event)?.delete(handler); // returns unsubscribe fn
+    return () => this.handlers.get(event)?.delete(handler);
   }
 
   _emit(event, data) {

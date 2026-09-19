@@ -9,15 +9,15 @@ import { useFmt } from './shared';
 import { useSettings } from '../contexts/SettingsContext';
 import { useAuth } from '../contexts/AuthContext';
 import { useWorkspace } from '../contexts/WorkspaceContext';
-import api, { apiGet, API_ROOT } from '../services/api';
+import api, { apiGet, apiRequest } from '../services/api';
 import wsService from '../services/websocket';
 import { useTranslation } from 'react-i18next';
 import { LANGUAGES } from '../i18n';
 import VoucherConfigPanel from '../components/settings/VoucherConfigPanel';
 import { registerWebPushToken, getPushPermissionStatus } from '../services/push';
 import { clearOnboardingForReplay } from '../utils/onboardingNav';
-import { getAuthToken } from '../utils/authStorage';
 import { isEventForActiveWorkspace } from '../utils/workspaceEvents';
+import { isDemoMode } from '../utils/isDemoCompany';
 import { formatBankCardNumber } from '../utils/voucherConfig';
 
 function Section({ title, sub, children, actions, testid, translated = false }) {
@@ -37,19 +37,7 @@ function Section({ title, sub, children, actions, testid, translated = false }) 
 }
 
 async function rootRequest(method, path, body) {
-  const headers = { 'Content-Type': 'application/json' };
-  const token = getAuthToken();
-  if (token) headers.Authorization = `Bearer ${token}`;
-  const response = await fetch(`${API_ROOT}${path}`, {
-    method,
-    headers,
-    body: body === undefined ? undefined : JSON.stringify(body),
-  });
-  if (!response.ok) {
-    const payload = await response.json().catch(() => ({}));
-    throw new Error(payload?.error?.message || payload?.message || `HTTP ${response.status}`);
-  }
-  return response.json();
+  return apiRequest(method, path, body);
 }
 
 function useRemoteConfig(path, defaults, options = {}) {
@@ -422,6 +410,7 @@ export function SettingsTallySync() {
   const [restoreCode, setRestoreCode] = useState('');
   const [approvals, setApprovals] = useState({ hardSync: [], backups: [], restoreRequests: [] });
   const [state, setState] = useState({ loading: true, saving: false, error: '', message: '' });
+  const mutateInFlight = useRef(false);
   // Prefer backend pairing.status — never synthesize CONNECTED from paired+online
   const connectionLabel = (() => {
     const fromWs = String(pairing?.status || pairingStatus || '').toUpperCase();
@@ -429,7 +418,7 @@ export function SettingsTallySync() {
     return paired ? 'RECONNECTING' : 'UNPAIRED';
   })();
   const reconnecting = connectionLabel === 'RECONNECTING';
-  const demoMode = connectionLabel === 'UNPAIRED' || connectionLabel === 'RECONNECTING';
+  const demoMode = isDemoMode(connectionLabel);
   // Unpair only exists when a Desktop is actually bound. UNPAIRED / Demo-only has nothing to unpair.
   const showUnpair = canUnpair && (connectionLabel === 'CONNECTED' || connectionLabel === 'RECONNECTING');
   const load = useCallback(async () => {
@@ -476,18 +465,20 @@ export function SettingsTallySync() {
     return () => { un1(); un2(); un3(); un4(); un5(); un6(); };
   }, [load]);
   const pair = async () => {
+    if (mutateInFlight.current) return;
     if (!canPair) return setState(s => ({ ...s, error: lt('Not allowed. Ask your Workspace administrator.'), message: '' }));
     if (!code.trim()) return setState(s => ({ ...s, error: lt('Enter the pairing code shown by the desktop agent.'), message: '' }));
     const wsId = currentWorkspace?.id;
     if (!wsId) return setState(s => ({ ...s, error: lt('No workspace selected.'), message: '' }));
     setState(s => ({ ...s, saving: true, error: '', message: '' }));
+    mutateInFlight.current = true;
     try {
       const response = await api.pairWorkspaceTally(wsId, code.trim());
       const awaiting = response?.data?.awaiting_desktop_claim;
       if (!awaiting) markPaired(wsId);
       setPaired(true);
       setCode('');
-      await loadCompanies({ forceDefaultFY: true, demoOnly: true });
+      await loadCompanies({ forceDefaultFY: true, demoOnly: false });
       await loadWorkspaceContext?.(wsId);
       setState(s => ({
         ...s,
@@ -507,11 +498,15 @@ export function SettingsTallySync() {
             ? (backend || lt('This Workspace already has a connected Tally Desktop. If the old computer is unavailable, use Restore / Replace Computer.'))
             : (backend || lt('Pairing failed'));
       setState(s => ({ ...s, saving: false, error: msg }));
+    } finally {
+      mutateInFlight.current = false;
     }
   };
   const unpair = async () => {
+    if (mutateInFlight.current) return;
     if (!canUnpair) return setState(s => ({ ...s, saving: false, error: lt('Not allowed. Ask your Workspace administrator.'), message: '' }));
     setState(s => ({ ...s, saving: true, error: '', message: '' }));
+    mutateInFlight.current = true;
     try {
       await unpairFromTally();
       setPaired(false);
@@ -522,6 +517,8 @@ export function SettingsTallySync() {
       setState(s => ({ ...s, saving: false, message: lt('Unpaired. Workspace is in Demo Mode until re-paired and synced.') }));
     } catch (err) {
       setState(s => ({ ...s, saving: false, error: err?.message || lt('Unpair failed') }));
+    } finally {
+      mutateInFlight.current = false;
     }
   };
   const lastSeen = device?.last_seen
@@ -616,12 +613,18 @@ export function SettingsTallySync() {
             <span className="text-[12px] text-ink">{row.operation || 'REBUILD'} · {row.device_id?.slice(0, 8)}</span>
             <div className="flex gap-2">
               <Button variant="primary" onClick={async () => {
+                if (mutateInFlight.current) return;
+                mutateInFlight.current = true;
                 try { await api.approveHardSync(row.id); await load(); }
                 catch (e) { setState(s => ({ ...s, error: e.message || lt('Approve failed') })); }
+                finally { mutateInFlight.current = false; }
               }}>{lt('Approve')}</Button>
               <Button onClick={async () => {
+                if (mutateInFlight.current) return;
+                mutateInFlight.current = true;
                 try { await api.rejectHardSync(row.id); await load(); }
                 catch (e) { setState(s => ({ ...s, error: e.message || lt('Reject failed') })); }
+                finally { mutateInFlight.current = false; }
               }}>{lt('Reject')}</Button>
             </div>
           </div>
@@ -639,12 +642,16 @@ export function SettingsTallySync() {
             <div key={b.id} className="flex items-center justify-between gap-2 text-[12px]">
               <span>{new Date(Number(b.completed_at || b.created_at) * 1000).toLocaleString()} · {b.sha256?.slice(0, 8)}</span>
               <Button variant="primary" disabled={!restoreCode.trim()} onClick={async () => {
+                if (mutateInFlight.current) return;
+                mutateInFlight.current = true;
                 try {
                   await api.approveWorkspaceRestore(restoreCode.trim(), b.id);
                   setState(s => ({ ...s, message: lt('Restore approved'), error: '' }));
                   await load();
                 } catch (e) {
                   setState(s => ({ ...s, error: e.message || lt('Restore approve failed') }));
+                } finally {
+                  mutateInFlight.current = false;
                 }
               }}>{lt('Approve this backup')}</Button>
             </div>
@@ -2365,7 +2372,7 @@ export function SettingsAbout() {
          <KV label="Product" value={lt('TallyDekho Web Portal')} />
          <KV label="Version" value={lt('2.0.0 (parity build)')} mono />
          <KV label="Data source" value={lt('Live TallyDekho backend')} />
-         <KV label="API mode" value={lt('Same-origin /app, /api and /tally services')} code />
+         <KV label="API mode" value={lt('Same-origin /api and /tally services')} code />
         <KV label="Support" value="support@tallydekho.com" />
       </Card>
     </Section>
