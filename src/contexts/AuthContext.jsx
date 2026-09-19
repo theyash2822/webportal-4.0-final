@@ -13,11 +13,24 @@ import api, {
   setUnauthorizedHandler,
   storeAuthSession,
   unpairWorkspaceTally,
+  setWriteAsDemo,
 } from '../services/api';
 import wsService from '../services/websocket';
 import { invalidateStockCache } from '../utils/stockCache';
 import { isEventForActiveWorkspace } from '../utils/workspaceEvents';
-import { tryAutoRegisterPush } from '../services/push';
+import { tryAutoRegisterPush, unregisterWebPushToken } from '../services/push';
+import { isDemoCompany, isDemoMode } from '../utils/isDemoCompany';
+import { fyEquals, matchFYInCompany } from '../utils/fyIdentity';
+import {
+  userIdOf,
+  readScopedCompany,
+  writeScopedCompany,
+  readScopedFY,
+  writeScopedFY,
+  clearScopedSelection,
+  dropLegacyGlobalTenantKeys,
+  dropAuthNavigationResidue,
+} from '../utils/tenantStorage';
 import {
   getAuthToken,
   clearAuthToken,
@@ -44,10 +57,22 @@ const PAIRED_STATUSES = new Set(['CONNECTED', 'RECONNECTING']);
   try { localStorage.removeItem('isPaired'); } catch { /* private mode */ }
 })();
 
-function isDemoCompany(c) {
-  const n = String(c?.name || '').toLowerCase();
-  const g = String(c?.guid || '');
-  return n.startsWith('demo') || g.startsWith('dddddddd') || g.toUpperCase().startsWith('DEMO');
+function readPersistedUser() {
+  try { return JSON.parse(localStorage.getItem('authUser')); } catch { return null; }
+}
+
+function readInitialCompany() {
+  const uid = userIdOf(readPersistedUser());
+  const ws = getWorkspaceId();
+  if (!uid || !ws) return null;
+  return readScopedCompany(uid, ws);
+}
+
+function readInitialFY(company) {
+  const uid = userIdOf(readPersistedUser());
+  const ws = getWorkspaceId();
+  if (!uid || !ws || !company?.guid) return null;
+  return readScopedFY(uid, ws, company.guid);
 }
 
 /** Default FY — match mobile Header (company/years ORDER BY begin_date DESC → index 0). */
@@ -61,10 +86,10 @@ function pickDefaultFY(company) {
 
 export function AuthProvider({ children }) {
   const [token,     setToken]     = useState(() => getAuthToken());
-  const [user,      setUser]      = useState(() => { try { return JSON.parse(localStorage.getItem('authUser')); } catch { return null; } });
-  const [companies, setCompanies] = useState(() => { try { return JSON.parse(localStorage.getItem('companies')) || []; } catch { return []; } });
-  const [selectedCompany, setSelectedCompany] = useState(() => { try { return JSON.parse(localStorage.getItem('selectedCompany')); } catch { return null; } });
-  const [selectedFY, setSelectedFY] = useState(() => { try { return JSON.parse(localStorage.getItem('selectedFY')); } catch { return null; } });
+  const [user,      setUser]      = useState(() => readPersistedUser());
+  const [companies, setCompanies] = useState([]);
+  const [selectedCompany, setSelectedCompany] = useState(() => readInitialCompany());
+  const [selectedFY, setSelectedFY] = useState(() => readInitialFY(readInitialCompany()));
   const [workspacePairing, setWorkspacePairing] = useState({});
   const [isDesktopOnline, setIsDesktopOnline] = useState(false);
   const [authBootstrapping, setAuthBootstrapping] = useState(false);
@@ -75,7 +100,10 @@ export function AuthProvider({ children }) {
   selectedFYRef.current = selectedFY;
   const selectedCompanyRef = useRef(selectedCompany);
   selectedCompanyRef.current = selectedCompany;
+  const userRef = useRef(user);
+  userRef.current = user;
   const lastPairingStatusRef = useRef('');
+  useEffect(() => { dropLegacyGlobalTenantKeys(); }, []);
   // Written synchronously so a loadCompanies() in the same tick reads the new status.
   const workspacePairingRef = useRef(workspacePairing);
 
@@ -112,10 +140,21 @@ export function AuthProvider({ children }) {
     };
   }, []);
 
+  const persistSelection = useCallback((company, fy) => {
+    const uid = userIdOf(userRef.current);
+    const ws = getWorkspaceId();
+    dropLegacyGlobalTenantKeys();
+    if (!uid || !ws) return;
+    if (company) writeScopedCompany(uid, ws, company);
+    if (company?.guid && fy) writeScopedFY(uid, ws, company.guid, fy);
+  }, []);
+
   const clearCompaniesState = useCallback(() => {
-    localStorage.removeItem('companies');
-    localStorage.removeItem('selectedCompany');
-    localStorage.removeItem('selectedFY');
+    const uid = userIdOf(userRef.current);
+    const ws = getWorkspaceId();
+    clearScopedSelection(uid, ws, selectedCompanyRef.current?.guid);
+    dropLegacyGlobalTenantKeys();
+    setWriteAsDemo(false);
     setCompanies([]);
     setSelectedCompany(null);
     setSelectedFY(null);
@@ -123,6 +162,8 @@ export function AuthProvider({ children }) {
 
   /** Local teardown shared by logout and the central 401 handler. */
   const clearSessionState = useCallback(() => {
+    dropAuthNavigationResidue();
+    setWriteAsDemo(false);
     clearAuthToken();
     localStorage.clear();
     workspacePairingRef.current = {};
@@ -139,45 +180,48 @@ export function AuthProvider({ children }) {
   }, [clearSessionState]);
 
   const applyCompanies = useCallback((arr, { preserveGuid, activeGuid, forceDefaultFY } = {}) => {
-    localStorage.setItem('companies', JSON.stringify(arr));
+    dropLegacyGlobalTenantKeys();
     setCompanies(arr);
     if (!arr.length) {
-      localStorage.removeItem('selectedCompany');
-      localStorage.removeItem('selectedFY');
+      setWriteAsDemo(false);
       setSelectedCompany(null);
       setSelectedFY(null);
       return;
     }
 
-    const preferredGuid = preserveGuid || activeGuid || selectedCompanyRef.current?.guid;
+    const uid = userIdOf(userRef.current);
+    const ws = getWorkspaceId();
+    const scoped = uid && ws ? readScopedCompany(uid, ws) : null;
+    // Never adopt a global GUID-only key. Scoped value wins; otherwise refetch/reselect.
+    const preferredGuid = preserveGuid || activeGuid || scoped?.guid || selectedCompanyRef.current?.guid;
     const freshComp = preferredGuid
       ? (arr.find(c => c.guid === preferredGuid)
         || (activeGuid ? arr.find(c => c.guid === activeGuid) : null)
         || arr[0])
       : (activeGuid ? arr.find(c => c.guid === activeGuid) : null) || arr[0];
-    localStorage.setItem('selectedCompany', JSON.stringify(freshComp));
     setSelectedCompany(freshComp);
+    setWriteAsDemo(isDemoCompany(freshComp));
+    if (freshComp?.guid) wsService.registerCompany(freshComp.guid);
 
-    let fy = forceDefaultFY ? null : selectedFYRef.current;
+    const scopedFy = uid && ws && freshComp?.guid ? readScopedFY(uid, ws, freshComp.guid) : null;
+    let fy = forceDefaultFY ? null : (scopedFy || selectedFYRef.current);
     if (!forceDefaultFY && fy && freshComp?.years?.length) {
-      const match = freshComp.years.find(
-        y => y.uniqueId === fy.uniqueId
-          || (y.finYear && fy.finYear && y.finYear === fy.finYear)
-          || (y.startDate === fy.startDate && y.endDate === fy.endDate),
-      );
-      fy = match || fy;
+      fy = matchFYInCompany(freshComp, fy);
     }
     if (!fy && freshComp?.years?.length) {
       fy = pickDefaultFY(freshComp);
     }
+    if (fy && selectedFYRef.current && fyEquals(selectedFYRef.current, fy) && selectedCompanyRef.current?.guid === freshComp?.guid) {
+      persistSelection(freshComp, fy);
+      return;
+    }
     if (fy) {
-      localStorage.setItem('selectedFY', JSON.stringify(fy));
       setSelectedFY(fy);
     } else {
-      localStorage.removeItem('selectedFY');
       setSelectedFY(null);
     }
-  }, []);
+    persistSelection(freshComp, fy);
+  }, [persistSelection]);
 
   const showToast = (message, type = 'info') => {
     setSyncToast({ message, type });
@@ -203,7 +247,7 @@ export function AuthProvider({ children }) {
       }
       const stillValid = !!(preserve && arr.some(c => c.guid === preserve));
       const preferDemoGuid = unpaired
-        ? arr.find((c) => String(c.name || '').toLowerCase().startsWith('demo') || String(c.guid || '').startsWith('dddddddd'))?.guid
+        ? arr.find((c) => isDemoCompany(c))?.guid
         : null;
       const hydrateGuid = stillValid ? preserve : (preferDemoGuid || arr[0]?.guid);
       if (hydrateGuid && arr.some((c) => c.guid === hydrateGuid && !(c.years || []).length)) {
@@ -211,7 +255,7 @@ export function AuthProvider({ children }) {
           const yearsRes = await fetchCompanyYears(hydrateGuid);
           const years = normalizeCompanyYears(hydrateGuid, yearsRes);
           arr = arr.map((c) => (c.guid === hydrateGuid ? { ...c, years } : c));
-        } catch (_) { /* keep company even if years fail */ }
+        } catch { /* keep company even if years fail */ }
       }
       // A response for the workspace we just left must never repaint the new one.
       if (!isWorkspaceCurrent(stamp)) return [];
@@ -264,7 +308,7 @@ export function AuthProvider({ children }) {
         loadCompaniesRef.current?.({ forceDefaultFY: true, demoOnly: true });
       } else if (status === 'RECONNECTING') {
         setWorkspacePairingStatus(wsId, 'RECONNECTING');
-        loadCompaniesRef.current?.({ forceDefaultFY: true, demoOnly: true });
+        loadCompaniesRef.current?.({ forceDefaultFY: true, demoOnly: false });
       }
     });
     const unUnpaired = wsService.on('unpaired', (data) => {
@@ -282,7 +326,7 @@ export function AuthProvider({ children }) {
       setWorkspacePairingStatus(getWorkspaceId(), 'RECONNECTING');
       lastPairingStatusRef.current = 'RECONNECTING';
       showToast(`✅ Paired with ${d?.deviceName || 'Desktop App'}! Waiting for first sync…`, 'success');
-      await loadCompaniesRef.current({ forceDefaultFY: true, demoOnly: true });
+      await loadCompaniesRef.current({ forceDefaultFY: true, demoOnly: false });
     });
 
     return () => { unSynced(); unTallyConn(); unUnpaired(); unLogout(); unPaired(); wsService.disconnect(); };
@@ -301,10 +345,8 @@ export function AuthProvider({ children }) {
       const wasPaired = isWorkspacePaired(stamp.id);
       setWorkspacePairingStatus(stamp.id, status || (paired ? 'RECONNECTING' : 'UNPAIRED'));
       setIsDesktopOnline(!!data?.desktop_online);
-      // CONNECTED never demoOnly; UNPAIRED|RECONNECTING → Demo. Prefer backend status over is_paired alone.
-      const demoOnly = status
-        ? (status === 'UNPAIRED' || status === 'RECONNECTING')
-        : !paired;
+      // CONNECTED and RECONNECTING stay on real books. Only UNPAIRED/PENDING is Demo.
+      const demoOnly = status ? isDemoMode(status) : !paired;
       const resolved = status || (paired ? 'RECONNECTING' : 'UNPAIRED');
       const prevStatus = lastPairingStatusRef.current;
       lastPairingStatusRef.current = resolved;
@@ -404,11 +446,14 @@ export function AuthProvider({ children }) {
   };
 
   const logout = async () => {
+    const pushToken = (() => { try { return localStorage.getItem('td_push_token'); } catch { return null; } })();
     try {
-      await api.logoutApi({});
+      await api.logoutApi(pushToken ? { pushToken } : {});
     } catch (err) {
       console.warn('[auth] logout API failed:', err?.message || err);
     }
+    try { await unregisterWebPushToken(); } catch { /* local clear still proceeds */ }
+    dropAuthNavigationResidue();
     clearSessionState();
   };
 
@@ -425,23 +470,29 @@ export function AuthProvider({ children }) {
         console.warn('fetchCompanyYears failed:', err.message);
       }
     }
-    localStorage.setItem('selectedCompany', JSON.stringify(full));
     setSelectedCompany(full);
+    setWriteAsDemo(isDemoCompany(full));
     wsService.registerCompany(full.guid);
-    const fy = pickDefaultFY(full);
+    const scopedFy = (() => {
+      const uid = userIdOf(userRef.current);
+      const ws = getWorkspaceId();
+      return uid && ws ? readScopedFY(uid, ws, full.guid) : null;
+    })();
+    const fy = matchFYInCompany(full, scopedFy) || pickDefaultFY(full);
     if (fy) {
-      localStorage.setItem('selectedFY', JSON.stringify(fy));
-      setSelectedFY(fy);
+      if (!fyEquals(selectedFYRef.current, fy)) setSelectedFY(fy);
+      persistSelection(full, fy);
+    } else {
+      persistSelection(full, null);
     }
-  }, []);
+  }, [persistSelection]);
 
   const selectFY = useCallback((fy) => {
-    if (!fy?.uniqueId) return;
-    const prev = selectedFYRef.current;
-    if (prev?.uniqueId === fy.uniqueId) return;
-    localStorage.setItem('selectedFY', JSON.stringify(fy));
+    if (!fy) return;
+    if (fyEquals(selectedFYRef.current, fy)) return;
     setSelectedFY(fy);
-  }, []);
+    persistSelection(selectedCompanyRef.current, fy);
+  }, [persistSelection]);
 
   /** Paired, for one workspace. Never downgrades a live CONNECTED to RECONNECTING. */
   const markPaired = useCallback((workspaceId) => {

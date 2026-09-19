@@ -11,7 +11,8 @@ import {
 } from '../services/api';
 import { flag } from '../config/featureFlags.js';
 import { canCreateWithEntryMode } from '../utils/entryMode.js';
-import { isEventForActiveWorkspace } from '../utils/workspaceEvents';
+import { isEventForActiveWorkspace, eventWorkspaceId } from '../utils/workspaceEvents';
+import { isDemoMode } from '../utils/isDemoCompany';
 import wsService from '../services/websocket';
 
 const WorkspaceContext = createContext(null);
@@ -84,10 +85,8 @@ export function WorkspaceProvider({ children }) {
     () => String(pairing?.status || '').toUpperCase() || null,
     [pairing],
   );
-  // Mobile SoT: demoMode = UNPAIRED || RECONNECTING; CONNECTED never Demo
-  const demoMode = pairingStatus
-    ? (pairingStatus === 'UNPAIRED' || pairingStatus === 'RECONNECTING')
-    : true; // fail-closed Demo when status unknown — never use isPaired for live eligibility
+  // Demo Mode = unpaired only. RECONNECTING stays on real historical books.
+  const demoMode = isDemoMode(pairingStatus);
   const roleSystemKey = role?.systemKey || role?.system_key || null;
   const isOwnerOrAdmin = membershipType === 'OWNER' || roleSystemKey === 'ADMIN';
 
@@ -177,9 +176,9 @@ export function WorkspaceProvider({ children }) {
       const ctx = await loadWorkspaceContext(target.id, { stamp });
       if (!ctx) return;
       const status = String(ctx?.pairing?.status || '').toUpperCase();
-      // Pairing is recorded against this workspace only. CONNECTED never demoOnly;
-      // UNPAIRED | RECONNECTING | unknown → Demo (fail closed).
-      const inDemo = status !== 'CONNECTED';
+      // Pairing is recorded against this workspace only. CONNECTED and RECONNECTING
+      // stay on real books; only UNPAIRED / unknown is Demo.
+      const inDemo = isDemoMode(status);
       if (status === 'CONNECTED' || status === 'RECONNECTING') setWorkspacePairingStatus?.(target.id, status);
       else if (status === 'UNPAIRED') markUnpaired?.(target.id);
       await loadCompanies?.({
@@ -216,7 +215,6 @@ export function WorkspaceProvider({ children }) {
 
     const refreshList = () => { bootstrap().catch(() => {}); };
     const softTally = (evt, data) => {
-      console.info(`[Workspace] ${evt}`, data);
       // Tally events for another workspace (or with no workspace at all) must not
       // reload this workspace's context or companies.
       if (!currentWorkspace?.id) return;
@@ -229,13 +227,43 @@ export function WorkspaceProvider({ children }) {
           const fromCtx = String(ctx?.pairing?.status || '').toUpperCase();
           const status = evt === 'unpaired' ? 'UNPAIRED' : (fromEvt || fromCtx);
           syncPairingFromCtx(ctx, { allowUnpair: status === 'UNPAIRED' });
-          if (status === 'CONNECTED') {
+          if (status === 'CONNECTED' || status === 'RECONNECTING') {
             await loadCompanies?.({ demoOnly: false, forceDefaultFY: true });
-          } else if (status === 'UNPAIRED' || status === 'RECONNECTING') {
+          } else if (status === 'UNPAIRED') {
             await loadCompanies?.({ demoOnly: true, forceDefaultFY: true });
           }
         })
         .catch(() => {});
+    };
+
+    const leaveCurrentWorkspace = async (data, fallbackMessage) => {
+      if (!isEventForActiveWorkspace(data, currentWorkspace?.id)) return;
+      showToast?.(data?.message || fallbackMessage, 'warning');
+      clearCompaniesState?.();
+      applyAccess(EMPTY_ACCESS);
+      const lostId = eventWorkspaceId(data) || currentWorkspace?.id;
+      try {
+        const listRes = await fetchMyWorkspaces();
+        const list = unwrap(listRes) || [];
+        const arr = (Array.isArray(list) ? list : []).filter((w) => w.id !== lostId && w.membershipStatus !== 'SUSPENDED');
+        setWorkspaces(arr);
+        const next = arr.find((w) => w.isBase) || arr[0];
+        if (next) {
+          setWorkspaceId(next.id);
+          const stamp = workspaceStamp();
+          const ctx = await loadWorkspaceContext(next.id, { stamp });
+          if (!ctx || !isWorkspaceCurrent(stamp)) return;
+          syncPairingFromCtx(ctx, { allowUnpair: true });
+          const status = String(ctx?.pairing?.status || '').toUpperCase();
+          await loadCompanies?.({ forceDefaultFY: true, demoOnly: isDemoMode(status) });
+        } else {
+          setCurrentWorkspace(null);
+          setWorkspaceId(null);
+        }
+      } catch {
+        setCurrentWorkspace(null);
+        setWorkspaceId(null);
+      }
     };
 
     const unInvitation = wsService.on('invitation', (data) => {
@@ -243,17 +271,19 @@ export function WorkspaceProvider({ children }) {
       refreshInvitations();
       refreshList();
     });
-    const unMembership = wsService.on('membership_changed', () => {
+    const unMembership = wsService.on('membership_changed', (data) => {
+      if (!isEventForActiveWorkspace(data, currentWorkspace?.id)) return;
       showToast?.('Workspace membership updated', 'info');
       refreshList();
     });
     const unRevoked = wsService.on('membership_revoked', (data) => {
-      showToast?.(data?.message || 'Your membership was revoked', 'warning');
-      refreshList();
+      leaveCurrentWorkspace(data, 'Your membership was revoked');
     });
     const unAccess = wsService.on('access_revoked', (data) => {
-      showToast?.(data?.message || 'Workspace access revoked', 'warning');
-      refreshList();
+      leaveCurrentWorkspace(data, 'Workspace access revoked');
+    });
+    const unDenied = wsService.on('workspace_access_denied', (data) => {
+      leaveCurrentWorkspace(data, 'Workspace access denied');
     });
     const unHardReq = wsService.on('hard_sync_request', (data) => softTally('hard_sync_request', data));
     const unHardStatus = wsService.on('hard_sync_status', (data) => softTally('hard_sync_status', data));
@@ -262,16 +292,14 @@ export function WorkspaceProvider({ children }) {
     const unSynced = wsService.on('synced', (data) => softTally('synced', data));
     const unTallyConn = wsService.on('tally_connection', (data) => softTally('tally_connection', data));
     const unUnpaired = wsService.on('unpaired', (data) => softTally('unpaired', data));
-    const unBilling = wsService.on('billing_updated', () => {
-      console.info('[Workspace] billing_updated');
-    });
+    const unBilling = wsService.on('billing_updated', () => {});
 
     return () => {
-      unInvitation(); unMembership(); unRevoked(); unAccess();
+      unInvitation(); unMembership(); unRevoked(); unAccess(); unDenied();
       unHardReq(); unHardStatus(); unRestoreReq(); unRestoreStatus();
       unSynced(); unTallyConn(); unUnpaired(); unBilling();
     };
-  }, [token, bootstrap, currentWorkspace?.id, loadWorkspaceContext, syncPairingFromCtx, showToast, refreshInvitations, loadCompanies]);
+  }, [token, bootstrap, currentWorkspace?.id, loadWorkspaceContext, syncPairingFromCtx, showToast, refreshInvitations, loadCompanies, clearCompaniesState, applyAccess]);
 
   const switchWorkspace = useCallback(async (workspaceId) => {
     if (!workspaceId || workspaceId === currentWorkspace?.id) return;
@@ -313,7 +341,7 @@ export function WorkspaceProvider({ children }) {
     const status = String(ctx?.pairing?.status || '').toUpperCase();
     await loadCompanies?.({
       forceDefaultFY: true,
-      demoOnly: status !== 'CONNECTED',
+      demoOnly: isDemoMode(status),
     });
     showToast?.('Workspace switched', 'success');
   }, [currentWorkspace, applyAccess, loadWorkspaceContext, syncPairingFromCtx, clearCompaniesState, loadCompanies, showToast]);

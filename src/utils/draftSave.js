@@ -16,16 +16,12 @@ function legacyDraftKey(prefix, companyGuid) {
 export function loadDraft(prefix, companyGuid, workspaceId = null) {
   try {
     const key = draftKey(prefix, companyGuid, workspaceId);
-    let raw = localStorage.getItem(key);
-    // One-time migrate from pre-Phase-3 global key (preserve user drafts)
-    if (!raw && workspaceId && companyGuid) {
+    // Ambiguous GUID-only drafts cannot prove which workspace created them.
+    if (workspaceId && companyGuid) {
       const legacy = legacyDraftKey(prefix, companyGuid);
-      raw = localStorage.getItem(legacy);
-      if (raw) {
-        localStorage.setItem(key, raw);
-        localStorage.removeItem(legacy);
-      }
+      if (localStorage.getItem(legacy)) localStorage.removeItem(legacy);
     }
+    const raw = localStorage.getItem(key);
     if (!raw) return null;
     const d = JSON.parse(raw);
     if (!d?.savedAt || Date.now() - d.savedAt > TTL_MS) {
