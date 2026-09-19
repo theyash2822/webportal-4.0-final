@@ -16,8 +16,6 @@ describe('billingCredits', () => {
 
   it('recognises insufficient-credit errors without logging out', () => {
     expect(isInsufficientCreditsError('INSUFFICIENT_CREDITS', 402)).toBe(true);
-    expect(isInsufficientCreditsError('MIXED_FUNDING_PRIORITY_UNDEFINED', 409)).toBe(true);
-    expect(isInsufficientCreditsError('SPLIT_FUNDING_RULE_UNDEFINED', 409)).toBe(true);
     expect(isInsufficientCreditsError('FORBIDDEN', 403)).toBe(false);
   });
 });

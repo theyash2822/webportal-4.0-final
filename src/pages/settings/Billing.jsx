@@ -307,11 +307,6 @@ export function SettingsBilling() {
               <Card className="space-y-2 p-5">
                 <p className="text-sm font-semibold text-ink">{lt('Overview')}</p>
                 <p className="text-2xl font-bold text-ink">{balance != null ? `${balance} ${lt('credits')}` : '—'}</p>
-                {overview?.workspaceCredits && (
-                  <p className="text-xs text-ink-soft">
-                    {lt('This workspace')}: {overview.workspaceCredits.available} {lt('credits')}
-                  </p>
-                )}
                 <p className="text-xs text-ink-soft">{lt('Signup bonus and top-ups appear as credit lots on the backend wallet.')}</p>
                 {(overview?.lots || []).length > 0 && (
                   <ul className="mt-2 divide-y divide-line">
