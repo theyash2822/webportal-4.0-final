@@ -23,6 +23,7 @@ import {
 import { persistVoucherConfigs } from '../../utils/voucherPdfBuild';
 import { buildThermalHTML } from '../../utils/thermalPrint';
 import { sanitizeImageSrc } from '../../utils/sanitizeImageSrc';
+import { todayLocalISO } from '../../utils/periodDates';
 
 function GeneratedQrPreview({ cfg }) {
   const [src, setSrc] = useState(null);
@@ -303,7 +304,7 @@ export default function VoucherConfigPanel() {
       voucher: {
         voucher_number: 'SMPL/2425/001',
         voucher_type: label,
-        date: new Date().toISOString().slice(0, 10),
+        date: todayLocalISO(),
         amount: 12980,
         party_amount: 12980,
         narration: 'Sample preview document',

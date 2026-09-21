@@ -80,7 +80,7 @@ export default function CashflowReport() {
           <div className="rounded-xl border border-line bg-surface p-5">
             <div className="flex flex-wrap items-start justify-between gap-3">
               <div>
-                <p className="text-xs font-bold uppercase tracking-wider text-ink-soft">{lt('Net Cash')}</p>
+                <p className="text-xs font-bold uppercase tracking-wider text-ink-soft">{lt('Cash & Bank Balance')}</p>
                 <p className="display mt-2 text-4xl font-bold tabular text-ink">{mc(netCash)}</p>
               </div>
               <Pill tone={healthy ? 'pos' : 'neg'}>

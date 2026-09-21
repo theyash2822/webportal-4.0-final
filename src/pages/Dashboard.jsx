@@ -454,7 +454,7 @@ export default function Dashboard() {
       }
       >
       <div className="flex flex-col items-center pt-2">
-        <p className="text-sm font-semibold uppercase tracking-wider text-ink-soft">{lt('Net Cash')}</p>
+        <p className="text-sm font-semibold uppercase tracking-wider text-ink-soft">{lt('Cash & Bank Balance')}</p>
         <p className="display mt-2 text-4xl font-bold leading-none text-ink tabular tracking-tight">
           <AnimatedNumber value={netCash} format={mc} testid="net-cash-value" />
         </p>

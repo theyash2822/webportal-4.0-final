@@ -288,7 +288,7 @@ export function AuthProvider({ children }) {
     const unSynced   = wsService.on('synced',   (data) => {
       if (!isEventForActiveWorkspace(data)) return;
       showToast('✅ Tally data synced', 'success');
-      invalidateStockCache(selectedCompanyRef.current?.guid);
+      invalidateStockCache(selectedCompanyRef.current?.guid, getWorkspaceId());
       lastPairingStatusRef.current = 'CONNECTED';
       setWorkspacePairingStatus(getWorkspaceId(), 'CONNECTED');
       loadCompaniesRef.current?.({ forceDefaultFY: isDemoCompany(selectedCompanyRef.current), demoOnly: false });

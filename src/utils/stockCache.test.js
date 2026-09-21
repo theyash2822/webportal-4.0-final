@@ -40,16 +40,21 @@ describe('stock cache key', () => {
     expect(readStockCache(GUID, FY)).toEqual([{ name: 'ABC item' }]);
   });
 
-  it('still clears every workspace entry for a company on sync', () => {
+  it('invalidating one workspace leaves the other workspace cache', () => {
     setWorkspaceId('ws-ABC');
     writeStockCache(GUID, FY, [{ name: 'ABC item' }]);
     setWorkspaceId('ws-XYZ');
     writeStockCache(GUID, FY, [{ name: 'XYZ item' }]);
 
-    invalidateStockCache(GUID);
+    invalidateStockCache(GUID, 'ws-ABC');
 
-    expect(readStockCache(GUID, FY)).toBeNull();
+    setWorkspaceId('ws-XYZ');
+    expect(readStockCache(GUID, FY)).toEqual([{ name: 'XYZ item' }]);
     setWorkspaceId('ws-ABC');
+    expect(readStockCache(GUID, FY)).toBeNull();
+
+    invalidateStockCache(GUID, 'ws-XYZ');
+    setWorkspaceId('ws-XYZ');
     expect(readStockCache(GUID, FY)).toBeNull();
   });
 });

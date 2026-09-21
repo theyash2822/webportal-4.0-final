@@ -12,17 +12,13 @@ import {
 } from './common';
 import { PartyForm } from './masterForms';
 import { loadDraft, saveDraft, clearDraft } from '../../utils/draftSave';
+import { addLocalDays } from '../../utils/periodDates';
 
 const DRAFT_MODES = new Set(['sales-invoice', 'proforma', 'purchase-invoice']);
 
 const TERMS = 'Goods once sold will not be taken back.';
 
-const addDays = (date, days) => {
-  if (!date) return '';
-  const d = new Date(`${date}T00:00:00`);
-  d.setDate(d.getDate() + Number(days || 0));
-  return d.toISOString().slice(0, 10);
-};
+const addDays = (date, days) => addLocalDays(date, days);
 
 const paymentDays = (term, custom) => (
   term === '15d' ? 15 : term === '30d' ? 30 : term === 'custom' ? Math.max(0, num(custom)) : 0

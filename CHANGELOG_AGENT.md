@@ -4,6 +4,21 @@ Format: Date | Task | Files Changed | Behavior Changed | Tested | Risks
 
 ---
 
+## 2026-09-21 | Stock cache workspace isolation, fail-closed can(), cash labels
+
+`invalidateStockCache(guid, workspaceId)` only clears that workspace+GUID.
+Missing WorkspaceContext `can()` / `canCreate()` are false. Dashboard / cashflow
+“Net Cash” label is now “Cash & Bank Balance” (formula unchanged).
+
+---
+
+## 2026-09-21 | Due-date addDays uses local calendar
+
+`addLocalDays` in periodDates.js; voucher due dates and voucher-config sample
+date no longer use UTC `toISOString().slice(0,10)`.
+
+---
+
 ## 2026-09-21 | Invite requires explicit company access; local calendar dates
 Files: TeamAccess.jsx, periodDates.js, AuthContext, KpiPanel, create/common, inventory, masters
 Behavior: Send invite stays disabled until All companies or a selected list is chosen. Dashboard / create / snapshot “today” uses the browser calendar, not UTC.

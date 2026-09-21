@@ -29,6 +29,11 @@ export function writeStockCache(companyGuid, fy, items) {
   } catch { /* quota */ }
 }
 
-export function invalidateStockCache(companyGuid) {
-  Object.keys(localStorage).filter(k => k.startsWith(PREFIX) && (!companyGuid || k.includes(companyGuid))).forEach(k => localStorage.removeItem(k));
+export function invalidateStockCache(companyGuid, workspaceId) {
+  const ws = workspaceId ?? getWorkspaceId() ?? 'nows';
+  const guid = companyGuid || 'none';
+  const scoped = `${PREFIX}${ws}_${guid}_`;
+  Object.keys(localStorage)
+    .filter((k) => k.startsWith(scoped))
+    .forEach((k) => localStorage.removeItem(k));
 }

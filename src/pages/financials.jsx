@@ -633,7 +633,7 @@ export function CashFlow() {
     <ModuleView title="Cash Flow" sub="Inflow and outflow trends over time" testid="cashflow-view">
       {controls}
       <StatGrid items={[
-        { label: 'Net Cash', value: mc(netCash), sub: 'Cash + bank balances', tone: '#181818' },
+        { label: 'Cash & Bank Balance', value: mc(netCash), sub: 'Cash + bank balances', tone: '#181818' },
         { label: 'Income', value: mc(income), sub: 'Receipts this period', tone: '#447B4B' },
         { label: 'Expense', value: mc(expense), sub: 'Payments this period', tone: '#B14435' },
         { label: 'Net movement', value: mc(income - expense), sub: 'Receipts less payments', tone: '#3963E4' },
