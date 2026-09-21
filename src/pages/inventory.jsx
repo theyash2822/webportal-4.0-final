@@ -12,6 +12,7 @@ import { useAuth } from '../contexts/AuthContext';
 import api, { apiGet, unwrapList } from '../services/api';
 import BarcodeGunInput from '../components/BarcodeGunInput';
 import { printLabels, downloadLabelsPdf } from '../utils/labelPrint';
+import { todayLocalISO } from '../utils/periodDates';
 
 // Deep-link bridge: /inventory/<section>/<id> → /inventory/<section>?<key>=<id>
 // so path-based links (Quick Search, shared URLs) open the existing query-param drawer.
@@ -608,7 +609,7 @@ export function ExpirySchedule() {
 export function StockSnapshot() {
   const { money } = useFmt();
   const { selectedFY } = useAuth();
-  const [asOn, setAsOn] = useState(selectedFY?.endDate || new Date().toISOString().slice(0, 10));
+  const [asOn, setAsOn] = useState(selectedFY?.endDate || todayLocalISO());
   const state = useGet('/api/stocks/snapshot', { asOn });
   const d = responseData(state.data);
   const rows = withIds(d.warehouses || []);

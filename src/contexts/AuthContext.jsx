@@ -78,7 +78,8 @@ function readInitialFY(company) {
 /** Default FY — match mobile Header (company/years ORDER BY begin_date DESC → index 0). */
 function pickDefaultFY(company) {
   if (!company?.years?.length) return null;
-  const today = new Date().toISOString().slice(0, 10);
+  const now = new Date();
+  const today = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')}`;
   const inRange = company.years.find(y => y.startDate <= today && y.endDate >= today);
   if (inRange) return inRange;
   return company.years[0];

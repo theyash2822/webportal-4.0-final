@@ -12,6 +12,7 @@ import { useAuth } from '../contexts/AuthContext';
 import { useOpenCreate } from '../components/create/CreateDrawer';
 import { emptyLine } from '../components/create/common';
 import api, { unwrapList, mapHomeMetricsToTab } from '../services/api';
+import { todayLocalISO } from '../utils/periodDates';
 
 const number = value => Number(value) || 0;
 function useLiveCompanyMeta() {
@@ -381,7 +382,7 @@ export function AIInsights() {
     : api.fyParamFromFY(selectedFY);
   const isCurrentFY = useMemo(() => {
     if (!selectedFY?.endDate) return true;
-    return new Date().toISOString().slice(0, 10) <= selectedFY.endDate;
+    return todayLocalISO() <= selectedFY.endDate;
   }, [selectedFY?.endDate]);
 
   const refresh = useCallback(async () => {

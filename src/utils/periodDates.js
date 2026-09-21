@@ -1,8 +1,16 @@
 /** Dashboard period filters → ISO date range (inclusive, ending today). Same as mobile `periodDates.ts`. */
 const PERIOD_DAYS = { '7D': 7, '1M': 30, '3M': 90, '6M': 180 };
 
+/** Calendar date in the browser's timezone (not UTC). */
+export function todayLocalISO(d = new Date()) {
+  const y = d.getFullYear();
+  const m = String(d.getMonth() + 1).padStart(2, '0');
+  const day = String(d.getDate()).padStart(2, '0');
+  return `${y}-${m}-${day}`;
+}
+
 function toISO(d) {
-  return d.toISOString().slice(0, 10);
+  return todayLocalISO(d);
 }
 
 /**

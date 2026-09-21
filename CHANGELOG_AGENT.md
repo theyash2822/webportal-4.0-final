@@ -4,6 +4,12 @@ Format: Date | Task | Files Changed | Behavior Changed | Tested | Risks
 
 ---
 
+## 2026-09-21 | Invite requires explicit company access; local calendar dates
+Files: TeamAccess.jsx, periodDates.js, AuthContext, KpiPanel, create/common, inventory, masters
+Behavior: Send invite stays disabled until All companies or a selected list is chosen. Dashboard / create / snapshot “today” uses the browser calendar, not UTC.
+
+---
+
 ## 2026-09-19 | Snapshot branch `19-09-2026-final-code`
 Pushed to `theyash2822/webportal-4.0-final` (not `tallydekho-web` main).
 No extra product change beyond the billing-authority lock already on `cursor`.

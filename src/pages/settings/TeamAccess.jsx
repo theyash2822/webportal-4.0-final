@@ -180,15 +180,15 @@ export function SettingsTeamAccess() {
   const [registry, setRegistry] = useState({ capabilities: [], sensitivePolicies: [] });
   const [inviteMobile, setInviteMobile] = useState('');
   const [inviteRoleId, setInviteRoleId] = useState('');
-  const [inviteCompanyMode, setInviteCompanyMode] = useState('NONE');
+  const [inviteCompanyMode, setInviteCompanyMode] = useState('');
   const [inviteCompanyGuids, setInviteCompanyGuids] = useState([]);
-  const [inviteFyMode, setInviteFyMode] = useState('NONE');
+  const [inviteFyMode, setInviteFyMode] = useState('ALL');
   const [inviteFys, setInviteFys] = useState([]);
-  const [inviteLedgerMode, setInviteLedgerMode] = useState('NONE');
+  const [inviteLedgerMode, setInviteLedgerMode] = useState('ALL');
   const [inviteLedgers, setInviteLedgers] = useState([]);
-  const [inviteGodownMode, setInviteGodownMode] = useState('NONE');
+  const [inviteGodownMode, setInviteGodownMode] = useState('ALL');
   const [inviteGodowns, setInviteGodowns] = useState([]);
-  const [inviteCcMode, setInviteCcMode] = useState('NONE');
+  const [inviteCcMode, setInviteCcMode] = useState('ALL');
   const [inviteCostCentres, setInviteCostCentres] = useState([]);
   const [state, setState] = useState({ loading: true, error: '', message: '' });
 
@@ -526,6 +526,15 @@ export function SettingsTeamAccess() {
     if (!availableSeats.length) {
       console.warn('[TeamAccess] No AVAILABLE paid seat — invite may fail or join without seat.');
     }
+    const companyReady = inviteCompanyMode === 'ALL'
+      || (inviteCompanyMode === 'SELECTED' && inviteCompanyGuids.length > 0);
+    if (!companyReady) {
+      setState((s) => ({
+        ...s,
+        error: lt('Choose All companies or at least one company before sending the invite.'),
+      }));
+      return;
+    }
     setState((s) => ({ ...s, message: '', error: '' }));
     inviteInFlight.current = true;
     try {
@@ -548,7 +557,7 @@ export function SettingsTeamAccess() {
         },
       });
       setInviteMobile('');
-      setInviteCompanyMode('ALL');
+      setInviteCompanyMode('');
       setInviteCompanyGuids([]);
       setInviteFyMode('ALL');
       setInviteFys([]);
@@ -741,7 +750,8 @@ export function SettingsTeamAccess() {
                   onChange={(e) => setInviteCompanyMode(e.target.value)}
                   data-testid="invite-company-mode"
                 >
-                  <option value="NONE">{lt('No company access yet')}</option>
+                  <option value="">{lt('Choose company access…')}</option>
+                  <option value="ALL">{lt('All companies')}</option>
                   <option value="SELECTED">{lt('Selected companies')}</option>
                 </select>
                 {inviteCompanyMode === 'NONE' && (
@@ -816,7 +826,11 @@ export function SettingsTeamAccess() {
                   </div>
                 )}
               </div>
-              <Button onClick={invite} disabled={!tallyConnected}>{lt('Send invite')}</Button>
+              <Button
+                onClick={invite}
+                disabled={!tallyConnected || !(inviteCompanyMode === 'ALL' || (inviteCompanyMode === 'SELECTED' && inviteCompanyGuids.length > 0))}
+                data-testid="send-invite"
+              >{lt('Send invite')}</Button>
               </fieldset>
             </Card>
           )}

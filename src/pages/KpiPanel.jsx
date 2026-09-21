@@ -8,6 +8,7 @@ import { useAuth } from '../contexts/AuthContext';
 import api from '../services/api';
 import { useFmt, useCompanyMeta, VoucherDrawer } from './shared';
 import { formatBankCardNumber, maskBankAccountNo } from '../utils/voucherConfig';
+import { resolvePeriodDates } from '../utils/periodDates';
 
 const num = v => Number(v || 0);
 const sum = (arr, key = 'amount') => arr.reduce((total, row) => total + num(row[key]), 0);
@@ -127,8 +128,8 @@ export default function KpiPanel({ metric, onClose }) {
         if (period === 'FY') { params.from = fyFrom; params.to = fyTo; }
         else {
           const days = period === '7D' ? 7 : 30;
-          const end = new Date(); const start = new Date(); start.setDate(start.getDate() - (days - 1));
-          params.from = start.toISOString().slice(0, 10); params.to = end.toISOString().slice(0, 10);
+          const { from, to } = resolvePeriodDates(period === '7D' ? '7D' : '1M');
+          params.from = from; params.to = to;
           params.period = period === '7D' ? '7D' : '1M';
         }
         const response = metric === 'payments'

@@ -12,9 +12,10 @@ import { fyKey } from '../../utils/fyIdentity';
 import api from '../../services/api';
 import BarcodeGunInput from '../BarcodeGunInput';
 import { readStockCache, writeStockCache } from '../../utils/stockCache';
+import { todayLocalISO } from '../../utils/periodDates';
 
 export const num = v => { const n = parseFloat(v); return Number.isFinite(n) ? n : 0; };
-export const todayISO = () => new Date().toISOString().slice(0, 10);
+export const todayISO = () => todayLocalISO();
 export const inr = v => `₹${num(v).toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
 
 /* ── Data loading ──────────────────────────────────────────────────────────
