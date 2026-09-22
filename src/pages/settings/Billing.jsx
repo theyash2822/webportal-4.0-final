@@ -121,6 +121,37 @@ export function SettingsBilling() {
     [orders],
   );
 
+  const seatKpis = useMemo(() => {
+    const list = seats || [];
+    const purchased = list.filter((s) => String(s.seat_kind || '').toUpperCase() === 'PAID').length;
+    const available = list.filter(
+      (s) => String(s.seat_kind || '').toUpperCase() === 'PAID'
+        && String(s.status || '').toUpperCase() === 'AVAILABLE',
+    ).length;
+    const assigned = list.filter((s) => String(s.status || '').toUpperCase() === 'ASSIGNED').length;
+    const total = list.length;
+    return { purchased, available, assigned, total };
+  }, [seats]);
+
+  const seatRoleLabel = (s) => {
+    if (String(s.membership_type || s.membershipType || '').toUpperCase() === 'OWNER'
+      || String(s.seat_kind || '').toUpperCase() === 'OWNER') {
+      return 'Owner';
+    }
+    return s.role_display_name || s.roleDisplayName || s.role_system_key || s.roleSystemKey || 'Member';
+  };
+
+  const seatUserLabel = (s) => {
+    const name = s.assigned_user_name || s.assignedUserName || '';
+    const mobile = s.assigned_user_mobile || s.assignedUserMobile || '';
+    if (name && mobile) return { name, mobile };
+    if (name) return { name, mobile: '' };
+    if (s.assigned_user_id || s.assignedUserId) {
+      return { name: `User ${s.assigned_user_id || s.assignedUserId}`, mobile: '' };
+    }
+    return { name: '', mobile: '' };
+  };
+
   const purchaseSeat = async () => {
     if (!isOwner || !wsId) return;
     setState((s) => ({ ...s, message: '', error: '' }));
@@ -396,7 +427,7 @@ export function SettingsBilling() {
           )}
 
           {tab === 'seats' && (
-            <Card className="space-y-3 p-5">
+            <Card className="space-y-4 p-5">
               <div className="flex flex-wrap items-center justify-between gap-2">
                 <p className="text-sm font-semibold text-ink">{lt('Workspaces & Seats')}</p>
                 <div className="flex gap-2">
@@ -404,9 +435,28 @@ export function SettingsBilling() {
                   <Button variant="primary" onClick={purchaseSeat} disabled={!wsId}>{lt('Buy seat')}</Button>
                 </div>
               </div>
+
+              <div className="grid gap-3 sm:grid-cols-3">
+                <div className="rounded-xl border border-line bg-cream/40 px-4 py-3">
+                  <p className="text-[11px] font-semibold uppercase tracking-wide text-ink-soft">{lt('Seats purchased')}</p>
+                  <p className="mt-1 text-2xl font-bold tabular text-ink">{seatKpis.purchased}</p>
+                  <p className="mt-0.5 text-xs text-ink-soft">{lt('Paid seats on this workspace')}</p>
+                </div>
+                <div className="rounded-xl border border-line bg-cream/40 px-4 py-3">
+                  <p className="text-[11px] font-semibold uppercase tracking-wide text-ink-soft">{lt('Seats available')}</p>
+                  <p className="mt-1 text-2xl font-bold tabular text-ink">{seatKpis.available}</p>
+                  <p className="mt-0.5 text-xs text-ink-soft">{lt('Ready to assign')}</p>
+                </div>
+                <div className="rounded-xl border border-line bg-cream/40 px-4 py-3">
+                  <p className="text-[11px] font-semibold uppercase tracking-wide text-ink-soft">{lt('Seats assigned')}</p>
+                  <p className="mt-1 text-2xl font-bold tabular text-ink">{seatKpis.assigned}</p>
+                  <p className="mt-0.5 text-xs text-ink-soft">{lt('Total seats:')} {seatKpis.total}</p>
+                </div>
+              </div>
+
               <p className="text-xs text-ink-soft">{lt('Current workspace:')} {currentWorkspace?.name || '—'}</p>
               {(workspaces || []).length > 0 && (
-                <ul className="mb-2 divide-y divide-line text-sm">
+                <ul className="mb-1 divide-y divide-line text-sm">
                   {workspaces.map((w) => (
                     <li key={w.id} className="flex justify-between py-1.5">
                       <span className="text-ink">{w.name}{w.isBase ? ' · Base' : ''}</span>
@@ -415,15 +465,38 @@ export function SettingsBilling() {
                   ))}
                 </ul>
               )}
-              <ul className="divide-y divide-line">
-                {(seats || []).map((s) => (
-                  <li key={s.id} className="flex justify-between py-2 text-sm">
-                    <span className="text-ink">{s.seat_kind} · {s.status}</span>
-                    <span className="text-ink-soft">{s.assigned_user_id ? `User ${s.assigned_user_id}` : lt('Unassigned')}</span>
-                  </li>
-                ))}
-                {!seats?.length && <li className="py-2 text-sm text-ink-soft">{lt('No seats yet.')}</li>}
-              </ul>
+
+              <div className="overflow-hidden rounded-xl border border-line">
+                <div className="grid grid-cols-[1.2fr_1fr_1fr_0.8fr] gap-2 border-b border-line bg-cream/50 px-3 py-2 text-[11px] font-semibold uppercase tracking-wide text-ink-soft">
+                  <span>{lt('Name')}</span>
+                  <span>{lt('Number')}</span>
+                  <span>{lt('Role')}</span>
+                  <span className="text-right">{lt('Seat')}</span>
+                </div>
+                <ul className="divide-y divide-line">
+                  {(seats || []).map((s) => {
+                    const user = seatUserLabel(s);
+                    const role = seatRoleLabel(s);
+                    const kind = String(s.seat_kind || s.seatKind || '—').toUpperCase();
+                    const status = String(s.status || '—').toUpperCase();
+                    return (
+                      <li key={s.id} className="grid grid-cols-[1.2fr_1fr_1fr_0.8fr] gap-2 px-3 py-2.5 text-sm">
+                        <span className="truncate font-medium text-ink">
+                          {user.name || lt('Unassigned')}
+                        </span>
+                        <span className="truncate text-ink-soft tabular">{user.mobile || '—'}</span>
+                        <span className="truncate text-ink">{role}</span>
+                        <span className="text-right text-xs font-semibold text-ink-soft">
+                          {kind} · {status}
+                        </span>
+                      </li>
+                    );
+                  })}
+                  {!seats?.length && (
+                    <li className="px-3 py-3 text-sm text-ink-soft">{lt('No seats yet.')}</li>
+                  )}
+                </ul>
+              </div>
             </Card>
           )}
 
